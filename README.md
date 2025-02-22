@@ -1,38 +1,84 @@
-# sv
+# Data Analyst AI
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+## Overview
 
-## Creating a project
+This is a simple Streamlit app implementing an AI agent, dedicated to analyse your files.
 
-If you're seeing this, you've probably already done this step. Congrats!
+The advantage over other tools, is that it is agnostic to the type, schema and amount of the input data and can be used privately with locally running LLMs.
 
-```bash
-# create a new project in the current directory
-npx sv create
+## Sample Dataset
 
-# create a new project in my-app
-npx sv create my-app
-```
+Car Price Dataset
 
-## Developing
+source: Kaggle <link>https://www.kaggle.com/datasets/asinow/car-price-dataset/data</link>
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+# Data Analysis Backend
 
-```bash
-npm run dev
+This is the backend service for the Data Analysis Dashboard. It provides WebSocket-based API endpoints for analyzing data using both local LLM (Ollama) and OpenAI's GPT-4o-mini.
 
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
+## Prerequisites
 
-## Building
+1. Python 3.8 or higher
+2. Ollama installed locally (for local LLM analysis)
+3. OpenAI API key (for GPT-4 analysis)
 
-To create a production version of your app:
+## Setup
+
+1. Create a virtual environment:
 
 ```bash
-npm run build
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-You can preview the production build with `npm run preview`.
+2. Install dependencies:
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+```bash
+pip install -r requirements.txt
+```
+
+3. Set up environment variables:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` and add your OpenAI API key.
+
+4. Install and start Ollama (if not already done):
+
+```bash
+# Follow instructions at https://ollama.ai/
+ollama pull llama2  # Pull the Llama 2 model
+```
+
+## Running the Server
+
+Start the server with:
+
+```bash
+python main.py
+```
+
+The server will run on `http://localhost:8000`.
+
+## API Endpoints
+
+### WebSocket Endpoint: `/ws/analyze`
+
+Accepts WebSocket connections for real-time data analysis. Send JSON data in the following format:
+
+```json
+{
+	"files": [
+		{
+			"name": "data.csv",
+			"content": "..."
+		}
+	],
+	"useLocalModel": false,
+	"prompt": "Analyze sales trends"
+}
+```
+
+The server will stream back analysis results in real-time.
