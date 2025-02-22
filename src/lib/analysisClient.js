@@ -55,7 +55,7 @@ export class AnalysisClient {
 		}
 	}
 
-	async analyzeFiles(files, useLocalModel, prompt, callbacks = {}) {
+	async analyzeFiles(files, prompt, callbacks = {}) {
 		const connectAndWait = async () => {
 			if (!this.isConnected) {
 				this.connect();
@@ -94,7 +94,6 @@ export class AnalysisClient {
 			// Send the analysis request
 			const message = {
 				files: processedFiles,
-				useLocalModel,
 				prompt
 			};
 

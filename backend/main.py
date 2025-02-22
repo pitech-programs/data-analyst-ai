@@ -144,6 +144,82 @@ Outputs the analysis results to 'output/analysis_results.json' in this format:
         logger.error(f"Failed to generate analysis code: {str(e)}", exc_info=True)
         raise
 
+
+    
+async def iterate_analysis_script(file_names: List[str], analysis_prompt: str, current_script: str, error_message: str, websocket: WebSocket) -> tuple[str, bool]:
+    """
+    Iteratively improve the analysis script based on execution errors.
+    Returns a tuple of (new_script, success) where success indicates if execution was successful.
+    """
+    logger.info("Starting script iteration with error: %s", error_message)
+    
+    messages = [{
+        "role": "system",
+        "content": "You are a Python code debugging assistant. Fix the provided code based on the error message while maintaining the original analysis goals."
+    }, {
+        "role": "user",
+        "content": f"""The following Python script failed to execute properly:
+
+```python
+{current_script}
+```
+
+The error message was:
+{error_message}
+
+The script should analyze these files: {', '.join(file_names)}
+With this analysis focus: {analysis_prompt}
+
+Please provide a fixed version of the script that:
+1. Addresses the error
+2. Maintains the original analysis goals
+3. Ensures proper error handling
+4. Validates data before processing
+5. Properly saves results to 'output/analysis_results.json'
+"""
+    }]
+
+    try:
+        logger.info("Making API call to OpenAI for script fix")
+        client = openai.OpenAI()
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.2,
+        )
+        full_response = response.choices[0].message.content.strip()
+        
+        # Extract only the Python code from between ```python and ``` markers
+        import re
+        code_match = re.search(r'```python\n(.*?)```', full_response, re.DOTALL)
+        if not code_match:
+            logger.error("No Python code block found in the response")
+            return current_script, False
+            
+        new_script = code_match.group(1).strip()
+        logger.info("Generated fixed script")
+
+        # Save and execute the new script
+        script_path = os.path.join(TEMP_DIR, 'analysis_script.py')
+        with open(script_path, 'w') as f:
+            f.write(new_script)
+
+        try:
+            await execute_analysis_script(script_path, websocket)
+            # Check if the JSON file was created
+            if os.path.exists(os.path.join(OUTPUT_DIR, 'analysis_results.json')):
+                return new_script, True
+            else:
+                return new_script, False
+        except Exception as e:
+            return new_script, False
+
+    except Exception as e:
+        logger.error(f"Failed to generate fixed script: {str(e)}", exc_info=True)
+        return current_script, False
+
+
+
 # Execute the generated analysis script
 async def execute_analysis_script(script_path: str, websocket: WebSocket):
     """
@@ -262,78 +338,6 @@ def generate_pdf_from_html(html_path: str, pdf_path: str, websocket: WebSocket):
     except Exception as e:
         logger.error(f"Failed to generate PDF: {str(e)}")
         raise
-    
-async def iterate_analysis_script(file_names: List[str], analysis_prompt: str, current_script: str, error_message: str, websocket: WebSocket) -> tuple[str, bool]:
-    """
-    Iteratively improve the analysis script based on execution errors.
-    Returns a tuple of (new_script, success) where success indicates if execution was successful.
-    """
-    logger.info("Starting script iteration with error: %s", error_message)
-    
-    messages = [{
-        "role": "system",
-        "content": "You are a Python code debugging assistant. Fix the provided code based on the error message while maintaining the original analysis goals."
-    }, {
-        "role": "user",
-        "content": f"""The following Python script failed to execute properly:
-
-```python
-{current_script}
-```
-
-The error message was:
-{error_message}
-
-The script should analyze these files: {', '.join(file_names)}
-With this analysis focus: {analysis_prompt}
-
-Please provide a fixed version of the script that:
-1. Addresses the error
-2. Maintains the original analysis goals
-3. Ensures proper error handling
-4. Validates data before processing
-5. Properly saves results to 'output/analysis_results.json'
-"""
-    }]
-
-    try:
-        logger.info("Making API call to OpenAI for script fix")
-        client = openai.OpenAI()
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=0.2,
-        )
-        full_response = response.choices[0].message.content.strip()
-        
-        # Extract only the Python code from between ```python and ``` markers
-        import re
-        code_match = re.search(r'```python\n(.*?)```', full_response, re.DOTALL)
-        if not code_match:
-            logger.error("No Python code block found in the response")
-            return current_script, False
-            
-        new_script = code_match.group(1).strip()
-        logger.info("Generated fixed script")
-
-        # Save and execute the new script
-        script_path = os.path.join(TEMP_DIR, 'analysis_script.py')
-        with open(script_path, 'w') as f:
-            f.write(new_script)
-
-        try:
-            await execute_analysis_script(script_path, websocket)
-            # Check if the JSON file was created
-            if os.path.exists(os.path.join(OUTPUT_DIR, 'analysis_results.json')):
-                return new_script, True
-            else:
-                return new_script, False
-        except Exception as e:
-            return new_script, False
-
-    except Exception as e:
-        logger.error(f"Failed to generate fixed script: {str(e)}", exc_info=True)
-        return current_script, False
 
 # WebSocket endpoint for data analysis
 @app.websocket("/ws/analyze")
@@ -351,15 +355,9 @@ async def analyze_data(websocket: WebSocket):
                 
                 # Extract parameters from the received data
                 files_data = data.get("files", [])
-                use_local_model = data.get("useLocalModel", False)
                 analysis_prompt = data.get("prompt", "")
                 
-                logger.info(f"Analysis request: {len(files_data)} files, useLocalModel={use_local_model}")
-                
-                # Check if local model is requested (not supported)
-                if use_local_model:
-                    logger.warning("Local model requested but not supported")
-                    continue
+                logger.info(f"Analysis request: {len(files_data)} files")
                 
                 # Check if files and prompt are provided
                 if not files_data or not analysis_prompt:

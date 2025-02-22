@@ -10,7 +10,6 @@
 	});
 
 	let selectedFiles = [];
-	let useLocalModel = false;
 	let analysisPrompt = 'What is the most expensive brand on average?';
 	let currentStatus = 'Waiting for files...';
 	let aiMessage = '';
@@ -99,7 +98,7 @@
 		currentStatus = 'Starting analysis...';
 
 		try {
-			await analysisClient.analyzeFiles(selectedFiles, useLocalModel, analysisPrompt, {
+			await analysisClient.analyzeFiles(selectedFiles, analysisPrompt, {
 				onError: (error) => {
 					currentStatus = `Error: ${error}`;
 					isAnalyzing = false;
@@ -217,18 +216,6 @@
 		<div class="bg-gray-800 rounded-xl p-6 border border-gray-700 shadow-lg">
 			<h2 class="text-xl font-semibold mb-4">Analysis Controls</h2>
 			<div class="space-y-6">
-				<div class="flex items-center space-x-3">
-					<input
-						type="checkbox"
-						id="privacyToggle"
-						bind:checked={useLocalModel}
-						class="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500"
-					/>
-					<label for="privacyToggle" class="text-gray-300">
-						Use Local LLM for Enhanced Privacy
-					</label>
-				</div>
-
 				<div class="space-y-2">
 					<label for="analysisPrompt" class="block text-sm font-medium text-gray-300">
 						Analysis Focus
