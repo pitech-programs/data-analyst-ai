@@ -116,7 +116,7 @@ File structures:
 - Calculate basic statistics (mean, median, etc.)
 - Identify patterns and trends
 - Find correlations if applicable
-- Create at least 4 relevant plots:
+- Create at least 2 relevant plots:
   
   * Save as PNG files in 'output' directory
   * Use clear labels and titles
@@ -152,7 +152,6 @@ File structures:
             "plot2.png": "What this plot shows"
         }}
     }},
-    "recommendations": ["Recommendation 1", "Recommendation 2"],
     "metadata": {{
         "analysis_duration": "Time taken",
         "data_sources": {file_names},
@@ -308,8 +307,8 @@ def generate_html_report(analysis_json_path: str, output_html_path: str, websock
         # Prepare the prompt for OpenAI
         messages = [{
             "role": "system",
-            "content": """You are an expert HTML/CSS developer. Create a beautiful, modern HTML report using Tailwind CSS.
-The HTML should be a single self-contained file with the Tailwind CDN included."""
+            "content": """You are an expert HTML/CSS developer and data analyst. Create a beautiful, modern HTML Data analysis report using Tailwind CSS.
+The HTML should be a single self-contained file with the Tailwind CDN included. Focus on clear insights and professional presentation."""
         }, {
             "role": "user",
             "content": f"""Create a clean and professional HTML report page that presents the following analysis data:
@@ -325,27 +324,34 @@ REQUIREMENTS:
    - Add Inter font from Google Fonts
 
 2. Core Sections:
-   - Title and timestamp header
-   - Key findings summary
+   - Title and header
+   - Executive summary (3-5 key points)
+   - Data insights and trends
    - Data quality overview
-   - Statistical results
-   - Visualizations with descriptions
-   - Recommendations
-   - Analysis metadata footer
+   - Statistical analysis with interpretations
+   - Visualizations with business context
+   - Analysis metadata
 
-3. Design Features:
+3. Analysis Focus:
+   - Highlight main trends and patterns
+   - Explain key statistical findings
+   - Point out notable outliers
+   - Provide business context
+   - Include data-driven recommendations
+
+4. Design Features:
    - Clean, professional layout
-   - Responsive design (mobile and desktop)
+   - Responsive design
    - Card-based content sections
    - Clear typography and spacing
-   - Dark mode support
    - Proper image display
+   - Simple data tables
 
-4. Interactive Elements:
+5. Interactive Elements:
    - Collapsible sections
    - Back-to-top button
-   - Expandable tables
    - Image zoom on click
+   - Basic table sorting
 
 Return only the complete HTML code with all required scripts and styles included."""
         }]

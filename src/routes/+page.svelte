@@ -55,7 +55,14 @@
 	function openHtmlReport() {
 		const blob = new Blob([htmlContent], { type: 'text/html' });
 		const url = URL.createObjectURL(blob);
-		window.open(url, '_blank');
+
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = 'analysis_report.html';
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+
 		// Clean up the URL after a delay
 		setTimeout(() => URL.revokeObjectURL(url), 1000);
 	}
@@ -259,16 +266,10 @@
 										stroke-linecap="round"
 										stroke-linejoin="round"
 										stroke-width="2"
-										d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-									/>
-									<path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										stroke-width="2"
-										d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+										d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
 									/>
 								</svg>
-								<span>View HTML Report</span>
+								<span>Download HTML Report</span>
 							</button>
 						</div>
 						<div class="bg-gray-700 rounded-lg p-4">
