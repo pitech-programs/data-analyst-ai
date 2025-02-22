@@ -11,10 +11,12 @@
 
 	let selectedFiles = [];
 	let useLocalModel = false;
-	let analysisPrompt = 'What is the most expensive brand?';
+	let analysisPrompt = 'What is the most expensive brand on average?';
 	let currentStatus = 'Waiting for files...';
 	let aiMessage = '';
-	let downloadableFiles = [];
+	let htmlContent = '';
+	let pdfContent = '';
+	let imageData = {};
 	let analysisClient;
 	let isAnalyzing = false;
 	let messageContainer;
@@ -51,6 +53,34 @@
 		selectedFiles = [...selectedFiles, ...files].slice(0, 5);
 	}
 
+	function openHtmlReport() {
+		const blob = new Blob([htmlContent], { type: 'text/html' });
+		const url = URL.createObjectURL(blob);
+		window.open(url, '_blank');
+		// Clean up the URL after a delay
+		setTimeout(() => URL.revokeObjectURL(url), 1000);
+	}
+
+	function downloadPdfReport() {
+		const binaryContent = atob(pdfContent);
+		const bytes = new Uint8Array(binaryContent.length);
+		for (let i = 0; i < binaryContent.length; i++) {
+			bytes[i] = binaryContent.charCodeAt(i);
+		}
+		const blob = new Blob([bytes], { type: 'application/pdf' });
+		const url = URL.createObjectURL(blob);
+
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = 'analysis_report.pdf';
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+
+		// Clean up the URL after a delay
+		setTimeout(() => URL.revokeObjectURL(url), 1000);
+	}
+
 	async function startAnalysis() {
 		if (selectedFiles.length === 0) {
 			alert('Please select at least one file');
@@ -64,7 +94,8 @@
 
 		isAnalyzing = true;
 		aiMessage = '';
-		downloadableFiles = [];
+		htmlContent = '';
+		pdfContent = '';
 		currentStatus = 'Starting analysis...';
 
 		try {
@@ -74,8 +105,11 @@
 					isAnalyzing = false;
 				},
 				onStatus: (status) => {
-					currentStatus = status;
-					if (status === 'Analysis completed') {
+					currentStatus =
+						status === 'completed'
+							? '🎉 Analysis completed successfully! Your reports are ready below.'
+							: status;
+					if (status === 'completed') {
 						isAnalyzing = false;
 					}
 				},
@@ -88,12 +122,10 @@
 						}, 0);
 					}
 				},
-				onComplete: () => {
-					// Mock downloadable files for now
-					downloadableFiles = [
-						{ name: 'analysis_report.pdf', url: '#' },
-						{ name: 'data_visualization.png', url: '#' }
-					];
+				onComplete: ({ htmlContent: html, pdfContent: pdf, imageData: images }) => {
+					htmlContent = html;
+					pdfContent = pdf;
+					imageData = images;
 				}
 			});
 		} catch (error) {
@@ -226,19 +258,72 @@
 				<p class="text-lg text-blue-400">{currentStatus}</p>
 			</div>
 
-			{#if downloadableFiles.length > 0}
-				<div class="space-y-3">
-					{#each downloadableFiles as file}
-						<div class="flex items-center justify-between bg-gray-700 rounded-lg p-3">
-							<span class="text-gray-300">{file.name}</span>
-							<button class="px-4 py-1 bg-blue-600 hover:bg-blue-700 rounded-md transition-colors">
-								Download
+			{#if htmlContent && pdfContent}
+				<div class="space-y-4">
+					<div class="grid grid-cols-2 gap-4">
+						<div class="bg-gray-700 rounded-lg p-4">
+							<h3 class="text-lg font-medium mb-3 text-gray-200">Interactive Report</h3>
+							<button
+								on:click={openHtmlReport}
+								class="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center justify-center space-x-2"
+							>
+								<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+									/>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+									/>
+								</svg>
+								<span>View HTML Report</span>
 							</button>
 						</div>
-					{/each}
+						<div class="bg-gray-700 rounded-lg p-4">
+							<h3 class="text-lg font-medium mb-3 text-gray-200">PDF Report</h3>
+							<button
+								on:click={downloadPdfReport}
+								class="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center justify-center space-x-2"
+							>
+								<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+									/>
+								</svg>
+								<span>Download PDF Report</span>
+							</button>
+						</div>
+					</div>
+					<p class="text-sm text-gray-400 text-center mt-4">
+						The HTML report provides an interactive experience, while the PDF is perfect for sharing
+						and printing.
+					</p>
 				</div>
 			{:else}
-				<p class="text-gray-500 text-center py-8">Analysis results will appear here</p>
+				<div class="text-center py-8">
+					<svg
+						class="w-16 h-16 mx-auto text-gray-600 mb-4"
+						fill="none"
+						stroke="currentColor"
+						viewBox="0 0 24 24"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+						/>
+					</svg>
+					<p class="text-gray-500">Start an analysis to see your results here</p>
+				</div>
 			{/if}
 		</div>
 	</div>

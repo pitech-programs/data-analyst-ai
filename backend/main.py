@@ -1,6 +1,7 @@
 # Import required libraries
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect # type: ignore
 from fastapi.middleware.cors import CORSMiddleware # type: ignore
+from fastapi.staticfiles import StaticFiles
 import json
 import asyncio
 import os
@@ -11,6 +12,7 @@ from weasyprint import HTML # type: ignore
 from dotenv import load_dotenv # type: ignore
 import logging
 import uvicorn # type: ignore
+import base64
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -25,14 +27,17 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 # Create FastAPI app
 app = FastAPI()
 
-# Add CORS middleware (update allow_origins and allow_methods in production)
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[""],
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=[""],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount the output directory for static file serving
+app.mount("/static", StaticFiles(directory="output"), name="static")
 
 # Define directories for temporary, input, and output files
 TEMP_DIR = 'temp'
@@ -238,7 +243,7 @@ Return only the complete HTML code."""
         raise
 
 
-# Convert HTML to PDF using pdfkit
+# Convert HTML to PDF
 def generate_pdf_from_html(html_path: str, pdf_path: str, websocket: WebSocket):
     try:
         # Read the HTML content
@@ -414,18 +419,47 @@ async def analyze_data(websocket: WebSocket):
                 if not os.path.exists(analysis_json_path):
                     logger.error("Analysis results JSON not found")
                     continue
-                    
+                
+                await websocket.send_json({"status": f"Generating HTML report..."})
                 output_html_path = os.path.join(OUTPUT_DIR, 'report.html')
                 generate_html_report(analysis_json_path, output_html_path, websocket)
                 
                 # Convert HTML to PDF
+                await websocket.send_json({"status": f"Preparing everything for download..."})
                 output_pdf_path = os.path.join(OUTPUT_DIR, 'report.pdf')
                 generate_pdf_from_html(output_html_path, output_pdf_path, websocket)
                 
-                # Send completion message with PDF path
+                # Read file contents
+                with open(output_html_path, 'r', encoding='utf-8') as f:
+                    html_content = f.read()
+                with open(output_pdf_path, 'rb') as f:
+                    pdf_content = f.read()
+                
+                # Read image files and encode them
+                with open(analysis_json_path, 'r') as f:
+                    analysis_data = json.load(f)
+                
+                image_data = {}
+                for plot_path in analysis_data.get('plots', []):
+                    full_path = os.path.join(OUTPUT_DIR, os.path.basename(plot_path))
+                    if os.path.exists(full_path):
+                        with open(full_path, 'rb') as f:
+                            image_content = f.read()
+                            image_data[os.path.basename(plot_path)] = base64.b64encode(image_content).decode('utf-8')
+                
+                # Modify HTML content to use base64 encoded images
+                for image_name, image_content in image_data.items():
+                    html_content = html_content.replace(
+                        f'src="{image_name}"',
+                        f'src="data:image/png;base64,{image_content}"'
+                    )
+                
+                # Send completion message with file contents
                 await websocket.send_json({
                     "status": "completed",
-                    "pdf_path": output_pdf_path
+                    "html_content": html_content,
+                    "pdf_content": base64.b64encode(pdf_content).decode('utf-8'),
+                    "image_data": image_data
                 })
                 
             except WebSocketDisconnect:

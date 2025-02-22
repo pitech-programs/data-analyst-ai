@@ -108,8 +108,12 @@ export class AnalysisClient {
 					callbacks.onError?.(response.error);
 				} else if (response.status) {
 					callbacks.onStatus?.(response.status);
-					if (response.status === 'Analysis completed') {
-						callbacks.onComplete?.();
+					if (response.status === 'completed') {
+						callbacks.onComplete?.({
+							htmlContent: response.html_content,
+							pdfContent: response.pdf_content,
+							imageData: response.image_data
+						});
 					}
 				} else if (response.content) {
 					callbacks.onContent?.(response.content);
