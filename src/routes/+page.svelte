@@ -11,9 +11,9 @@
 
 	let selectedFiles = [];
 	let useLocalModel = false;
-	let analysisPrompt = 'What is the most expensive brand';
+	let analysisPrompt = 'What is the most expensive brand?';
 	let currentStatus = 'Waiting for files...';
-	let aiMessage = '\nasd\n\nasd\n';
+	let aiMessage = '';
 	let downloadableFiles = [];
 	let analysisClient;
 	let isAnalyzing = false;
