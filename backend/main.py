@@ -1,7 +1,7 @@
 # Import required libraries
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect # type: ignore
 from fastapi.middleware.cors import CORSMiddleware # type: ignore
-from fastapi.staticfiles import StaticFiles
+from fastapi.staticfiles import StaticFiles # type: ignore
 import json
 import asyncio
 import os
@@ -35,9 +35,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Mount the output directory for static file serving
-app.mount("/static", StaticFiles(directory="output"), name="static")
 
 # Define directories for temporary, input, and output files
 TEMP_DIR = 'temp'
@@ -95,28 +92,79 @@ async def generate_analysis_code(file_names: List[str], analysis_prompt: str, we
 
     messages = [{
         "role": "system",
-        "content": "You are a data analysis assistant with the ability to write Python code. Provide your response with explanations, but wrap the actual Python code in ```python ``` blocks."
+        "content": """You are a data analysis assistant with expertise in Python, pandas and matplotlib. 
+Write clean, efficient Python code that produces insightful analysis and clear visualizations."""
     }, {
         "role": "user",
-        "content": f"""Write a self-contained Python script that:
+        "content": f"""Write a Python script that analyzes the provided data:
 
-Imports necessary libraries (pandas, matplotlib.pyplot, json, os).
-Reads the following CSV files from the 'input' directory: {', '.join(file_names)}.
+1. Setup:
+- Import pandas, matplotlib.pyplot, json, os, numpy
+- set plt.style.use('default') at the beginning of the script
 
-Here is the structure of each file:
+2. Data Processing:
+- Read these CSV files: {', '.join(file_names)}
+- Clean the data as needed
+
+File structures:
 {''.join(file_structures)}
 
-Analyzes the data with focus on: {analysis_prompt}.
-Computes relevant statistics (e.g., mean, median, counts) based on the prompt.
-Make sure to use the correct data types for the statistics. (dont calcualte correlation on String etc.)
-Generates at least two plots using matplotlib (e.g., bar, scatter, histogram) and saves them as PNG files to the 'output' directory with descriptive filenames (e.g., 'output/plot1.png').
-Outputs the analysis results to 'output/analysis_results.json' in this format:
+3. Analysis Goal:
+{analysis_prompt}
+
+4. Required Analysis:
+- Calculate basic statistics (mean, median, etc.)
+- Identify patterns and trends
+- Find correlations if applicable
+- Create at least 4 relevant plots:
+  
+  * Save as PNG files in 'output' directory
+  * Use clear labels and titles
+  * Make them easy to read
+
+5. Save results to 'output/analysis_results.json':
 {{
-    "description": "Textual description of the analysis",
-    "statistics": "Key statistics as a string or dictionary",
-    "plots": ["path/to/plot1.png", "path/to/plot2.png"]
+    "title": "Analysis Report Title",
+    "timestamp": "YYYY-MM-DD HH:MM:SS",
+    "summary": {{
+        "key_findings": ["Main finding 1", "Main finding 2"],
+        "data_quality": {{
+            "missing_values": "Summary",
+            "data_types": "Summary",
+            "anomalies": "Any issues found"
+        }}
+    }},
+    "description": "Analysis details",
+    "statistics": {{
+        "basic_stats": {{
+            "numerical_summary": {{}},
+            "categorical_summary": {{}}
+        }},
+        "advanced_stats": {{
+            "correlations": {{}},
+            "segment_analysis": {{}}
+        }}
+    }},
+    "visualizations": {{
+        "plots": ["plot1.png", "plot2.png"],
+        "plot_descriptions": {{
+            "plot1.png": "What this plot shows",
+            "plot2.png": "What this plot shows"
+        }}
+    }},
+    "recommendations": ["Recommendation 1", "Recommendation 2"],
+    "metadata": {{
+        "analysis_duration": "Time taken",
+        "data_sources": {file_names},
+        "rows_analyzed": "Count",
+        "columns_analyzed": "List"
+    }}
 }}
-"""
+
+Remember to:
+- Handle errors appropriately
+- Comment complex operations
+- Make plots clear and professional"""
     }]
 
     try:
@@ -250,42 +298,56 @@ def generate_html_report(analysis_json_path: str, output_html_path: str, websock
         logger.info("Loading analysis results from JSON")
         with open(analysis_json_path, 'r') as f:
             analysis_data = json.load(f)
-
-        description = analysis_data.get('description', 'No description provided.')
-        statistics = analysis_data.get('statistics', 'No statistics provided.')
-        plots = analysis_data.get('plots', [])
         
         # Remove 'output/' prefix from plot paths since HTML will be in the same directory
-        plots = [plot.replace('output/', '') for plot in plots]
-        logger.info(f"Loaded analysis data with {len(plots)} plots")
-
+        if 'visualizations' in analysis_data and 'plots' in analysis_data['visualizations']:
+            analysis_data['visualizations']['plots'] = [
+                plot.replace('output/', '') for plot in analysis_data['visualizations']['plots']
+            ]
+        
         # Prepare the prompt for OpenAI
         messages = [{
             "role": "system",
-            "content": "You are an expert HTML/CSS developer. Create a beautiful, modern HTML report using Tailwind CSS. The HTML should be a single self-contained file with the Tailwind CDN included."
+            "content": """You are an expert HTML/CSS developer. Create a beautiful, modern HTML report using Tailwind CSS.
+The HTML should be a single self-contained file with the Tailwind CDN included."""
         }, {
             "role": "user",
-            "content": f"""Create a complete HTML report page with the following data:
+            "content": f"""Create a clean and professional HTML report page that presents the following analysis data:
 
-Description: {description}
+ANALYSIS DATA (use all relevant fields for the report):
+{json.dumps(analysis_data, indent=2)}
 
-Statistics: {statistics}
+REQUIREMENTS:
 
-Plot images to include: {plots}
+1. Document Setup:
+   - Include this script tag in the head: <script src="https://unpkg.com/@tailwindcss/browser@4"></script>
+   - Use proper meta tags and viewport settings
+   - Add Inter font from Google Fonts
 
-Requirements:
-1. Use Tailwind CSS for styling (include CDN)
-2. Create a modern, professional design
-3. Make it responsive
-4. Include proper sections for description, statistics, and plots
-5. Format the statistics section nicely (if it's JSON/dict, format it properly)
-6. Include a header with title and timestamp
-7. Make the plots display in a grid on larger screens and stack on mobile
-8. Add subtle animations for better UX
-9. Ensure good readability with proper spacing and typography
-10. Include a footer
+2. Core Sections:
+   - Title and timestamp header
+   - Key findings summary
+   - Data quality overview
+   - Statistical results
+   - Visualizations with descriptions
+   - Recommendations
+   - Analysis metadata footer
 
-Return only the complete HTML code."""
+3. Design Features:
+   - Clean, professional layout
+   - Responsive design (mobile and desktop)
+   - Card-based content sections
+   - Clear typography and spacing
+   - Dark mode support
+   - Proper image display
+
+4. Interactive Elements:
+   - Collapsible sections
+   - Back-to-top button
+   - Expandable tables
+   - Image zoom on click
+
+Return only the complete HTML code with all required scripts and styles included."""
         }]
 
         # Make API call to OpenAI
@@ -382,7 +444,7 @@ async def analyze_data(websocket: WebSocket):
                     f.write(analysis_code)
                 
                 # Execute the analysis script with retries
-                max_retries = 3
+                max_retries = 5
                 current_retry = 0
                 current_script = analysis_code
                 success = False
@@ -396,7 +458,7 @@ async def analyze_data(websocket: WebSocket):
                     except Exception as e:
                         error_message = str(e)
                         logger.error(f"Analysis script failed (attempt {current_retry + 1}/{max_retries}): {error_message}")
-                        await websocket.send_json({"status": f"Attempt {current_retry + 1} failed, retrying with improvements..."})
+                        await websocket.send_json({"status": f"Iteration {current_retry + 1} on the analysis..."})
                         
                         current_script, success = await iterate_analysis_script(
                             file_names,
@@ -438,7 +500,8 @@ async def analyze_data(websocket: WebSocket):
                     analysis_data = json.load(f)
                 
                 image_data = {}
-                for plot_path in analysis_data.get('plots', []):
+                visualizations = analysis_data.get('visualizations', {})
+                for plot_path in visualizations.get('plots', []):
                     full_path = os.path.join(OUTPUT_DIR, os.path.basename(plot_path))
                     if os.path.exists(full_path):
                         with open(full_path, 'rb') as f:
