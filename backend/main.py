@@ -77,6 +77,8 @@ async def generate_analysis_code(file_names: List[str], analysis_prompt: str, we
     logger.info(f"Starting code generation for files: {', '.join(file_names)}")
     logger.info(f"Analysis prompt: {analysis_prompt}")
 
+    await websocket.send_json({"content": "🔍 Analyzing your files and preparing the data analysis strategy...\n\n"})
+
     # Read CSV structure information
     file_structures = []
     for file_name in file_names:
@@ -84,11 +86,21 @@ async def generate_analysis_code(file_names: List[str], analysis_prompt: str, we
             import pandas as pd
             file_path = os.path.join(INPUT_DIR, file_name)
             df = pd.read_csv(file_path)
-            structure = f"\nFile: {file_name}\nColumns: {', '.join(df.columns)}\nFirst two rows:\n{df.head(2).to_string()}\n"
+            structure = f"\nFile: {file_name}\nColumns: {', '.join(df.columns)}\nFirst three rows:\n{df.head(3).to_string()}\n"
             file_structures.append(structure)
+            await websocket.send_json({
+                "content": f"📊 Analyzed {file_name}:\n- Found {len(df.columns)} columns\n- {len(df):,} rows of data\n\n"
+            })
         except Exception as e:
             logger.warning(f"Could not read structure for {file_name}: {str(e)}")
             file_structures.append(f"\nFile: {file_name}\nStructure could not be read.")
+            await websocket.send_json({
+                "content": f"⚠️ Could not analyze {file_name}: {str(e)}\n\n"
+            })
+
+    await websocket.send_json({
+        "content": "🤖 Now I'll write a Python script to analyze your data based on your requirements...\n\n"
+    })
 
     messages = [{
         "role": "system",
@@ -103,24 +115,25 @@ Write clean, efficient Python code that produces insightful analysis and clear v
 - set plt.style.use('default') at the beginning of the script
 
 2. Data Processing:
-- Read these CSV files: {', '.join(file_names)}
+- Read the following CSV files from the 'input' directory: {', '.join(file_names)}.
 - Clean the data as needed
 
 File structures:
 {''.join(file_structures)}
 
-3. Analysis Goal:
-{analysis_prompt}
 
-4. Required Analysis:
+3. Required Analysis:
 - Calculate basic statistics (mean, median, etc.)
 - Identify patterns and trends
 - Find correlations if applicable
 - Create at least 2 relevant plots:
-  
   * Save as PNG files in 'output' directory
   * Use clear labels and titles
   * Make them easy to read
+  * all plots should have a similar style
+
+4. Additional analysis requirements:
+{analysis_prompt}
 
 5. Save results to 'output/analysis_results.json':
 {{
@@ -154,27 +167,64 @@ File structures:
     }},
     "metadata": {{
         "analysis_duration": "Time taken",
-        "data_sources": {file_names},
+        "data_sources": {file_names}
         "rows_analyzed": "Count",
         "columns_analyzed": "List"
     }}
 }}
 
-Remember to:
-- Handle errors appropriately
-- Comment complex operations
-- Make plots clear and professional"""
+Do not use any try except blocks - we will deal with errors in another way.
+Do not handle errors in the code, we will deal with them in the iteration process.
+"""
     }]
 
     try:
         logger.info("Making API call to OpenAI")
         client = openai.OpenAI()
-        response = client.chat.completions.create(
+        stream = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
-            temperature=0.2,
+            stream=True,
         )
-        full_response = response.choices[0].message.content.strip()
+        
+        logger.info("Stream object created, beginning to process chunks")
+        full_response = ""
+        code_section = False
+        current_section = ""
+        
+        await websocket.send_json({
+            "content": "💭 Planning the analysis approach:\n\n"
+        })
+
+        for chunk in stream:
+            if chunk and chunk.choices and chunk.choices[0].delta.content:
+                content = chunk.choices[0].delta.content
+                full_response += content
+                
+                # Check if we're entering or leaving a code block
+                if "```python" in content:
+                    code_section = True
+                    current_section = "```python\n"
+                    continue
+                elif "```" in content and code_section:
+                    code_section = False
+                    if current_section:
+                        await websocket.send_json({
+                            "content": "🔧 Generated analysis code. Now preparing to execute...\n\n"
+                        })
+                    current_section = ""
+                    continue
+                
+                # If we're in a code section, accumulate the code
+                if code_section:
+                    current_section += content
+                else:
+                    # If not in code section, stream the planning/thinking process
+                    if content.strip():
+                        await websocket.send_json({
+                            "content": content
+                        })
+        
         logger.info("Received response from OpenAI")
         
         # Extract only the Python code from between ```python and ``` markers
@@ -186,6 +236,9 @@ Remember to:
             
         code = code_match.group(1).strip()
         logger.info("Successfully extracted Python code from response")
+        await websocket.send_json({
+            "content": "✨ Analysis code is ready! Starting the execution phase...\n\n"
+        })
         return code
     except Exception as e:
         logger.error(f"Failed to generate analysis code: {str(e)}", exc_info=True)
@@ -214,7 +267,7 @@ async def iterate_analysis_script(file_names: List[str], analysis_prompt: str, c
 The error message was:
 {error_message}
 
-The script should analyze these files: {', '.join(file_names)}
+The script should analyze these files from the 'input' directory: {', '.join(file_names)}
 With this analysis focus: {analysis_prompt}
 
 Please provide a fixed version of the script that:
@@ -229,12 +282,41 @@ Please provide a fixed version of the script that:
     try:
         logger.info("Making API call to OpenAI for script fix")
         client = openai.OpenAI()
-        response = client.chat.completions.create(
+        stream = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
-            temperature=0.2,
+            stream=True,
         )
-        full_response = response.choices[0].message.content.strip()
+
+        logger.info("Stream object created, beginning to process chunks")
+        full_response = ""
+        code_section = False
+        current_section = ""
+
+        for chunk in stream:
+            if chunk and chunk.choices and chunk.choices[0].delta.content:
+                content = chunk.choices[0].delta.content
+                full_response += content
+                
+                # Check if we're entering or leaving a code block
+                if "```python" in content:
+                    code_section = True
+                    current_section = "```python\n"
+                    continue
+                elif "```" in content and code_section:
+                    code_section = False
+                    current_section = ""
+                    continue
+                
+                # If we're in a code section, accumulate the code
+                if code_section:
+                    current_section += content
+                else:
+                    # If not in code section, stream the content directly
+                    if content.strip():
+                        await websocket.send_json({
+                            "content": content
+                        })
         
         # Extract only the Python code from between ```python and ``` markers
         import re
@@ -275,19 +357,22 @@ async def execute_analysis_script(script_path: str, websocket: WebSocket):
     logger.info(f"Starting execution of analysis script: {script_path}")
     try:
         logger.info("Running analysis script")
+        await websocket.send_json({"status": "Executing analysis script..."})
         result = subprocess.run(['python', script_path], capture_output=True, text=True)
         if result.returncode != 0:
             error_msg = f"Script execution failed: {result.stderr}"
             logger.error(error_msg)
+            await websocket.send_json({"status": "Analysis script failed, attempting to fix..."})
             raise Exception(error_msg)
         logger.info("Analysis script executed successfully")
+        await websocket.send_json({"status": "Analysis script executed successfully"})
         return result.stdout
     except Exception as e:
         logger.error(f"Error executing analysis script: {str(e)}", exc_info=True)
         raise
 
 # Generate an HTML report from the analysis results using OpenAI API
-def generate_html_report(analysis_json_path: str, output_html_path: str, websocket: WebSocket):
+async def generate_html_report(analysis_json_path: str, output_html_path: str, websocket: WebSocket):
     """
     Generate an HTML report from the analysis results using OpenAI API.
     """
@@ -295,6 +380,7 @@ def generate_html_report(analysis_json_path: str, output_html_path: str, websock
     try:
         # Load analysis data from JSON file
         logger.info("Loading analysis results from JSON")
+        
         with open(analysis_json_path, 'r') as f:
             analysis_data = json.load(f)
         
@@ -307,11 +393,11 @@ def generate_html_report(analysis_json_path: str, output_html_path: str, websock
         # Prepare the prompt for OpenAI
         messages = [{
             "role": "system",
-            "content": """You are an expert HTML/CSS developer and data analyst. Create a beautiful, modern HTML Data analysis report using Tailwind CSS.
-The HTML should be a single self-contained file with the Tailwind CDN included. Focus on clear insights and professional presentation."""
+            "content": """You are an expert HTML/CSS developer and data analyst. Create a beautiful, modern HTML report about a data analysis using Tailwind CSS.
+The HTML should be a single self-contained file with the Tailwind CDN included."""
         }, {
             "role": "user",
-            "content": f"""Create a clean and professional HTML report page that presents the following analysis data:
+            "content": f"""Create a clean and professional HTML report page that presents the analysis of the following data:
 
 ANALYSIS DATA (use all relevant fields for the report):
 {json.dumps(analysis_data, indent=2)}
@@ -321,37 +407,20 @@ REQUIREMENTS:
 1. Document Setup:
    - Include this script tag in the head: <script src="https://unpkg.com/@tailwindcss/browser@4"></script>
    - Use proper meta tags and viewport settings
-   - Add Inter font from Google Fonts
-
+   
 2. Core Sections:
    - Title and header
-   - Executive summary (3-5 key points)
-   - Data insights and trends
+   - Key findings summary
    - Data quality overview
-   - Statistical analysis with interpretations
-   - Visualizations with business context
-   - Analysis metadata
+   - Statistical results
+   - Visualizations with descriptions
+   - Analysis metadata footer
 
-3. Analysis Focus:
-   - Highlight main trends and patterns
-   - Explain key statistical findings
-   - Point out notable outliers
-   - Provide business context
-   - Include data-driven recommendations
-
-4. Design Features:
+3. Design Features:
    - Clean, professional layout
-   - Responsive design
+   - Responsive design (mobile and desktop)
    - Card-based content sections
    - Clear typography and spacing
-   - Proper image display
-   - Simple data tables
-
-5. Interactive Elements:
-   - Collapsible sections
-   - Back-to-top button
-   - Image zoom on click
-   - Basic table sorting
 
 Return only the complete HTML code with all required scripts and styles included."""
         }]
@@ -359,13 +428,34 @@ Return only the complete HTML code with all required scripts and styles included
         # Make API call to OpenAI
         logger.info("Making API call to OpenAI for HTML generation")
         client = openai.OpenAI()
-        response = client.chat.completions.create(
+        stream = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
-            temperature=0.2,
+            stream=True,
         )
         
-        full_response = response.choices[0].message.content.strip()
+        logger.info("Stream object created, beginning to process chunks")
+        full_response = ""
+        in_html = False
+        
+        for chunk in stream:
+            if chunk and chunk.choices and chunk.choices[0].delta.content:
+                content = chunk.choices[0].delta.content
+                full_response += content
+                
+                # Check if we're entering or leaving an HTML block
+                if "```html" in content:
+                    in_html = True
+                    continue
+                elif "```" in content and in_html:
+                    in_html = False
+                    continue
+                
+                # Stream all non-empty content directly
+                if content.strip():
+                    await websocket.send_json({
+                        "content": content
+                    })
         
         # Extract only the HTML from between ```html and ``` markers
         import re
@@ -464,7 +554,7 @@ async def analyze_data(websocket: WebSocket):
                     except Exception as e:
                         error_message = str(e)
                         logger.error(f"Analysis script failed (attempt {current_retry + 1}/{max_retries}): {error_message}")
-                        await websocket.send_json({"status": f"Iteration {current_retry + 1} on the analysis..."})
+                        await websocket.send_json({"status": "Retrying analysis..."})
                         
                         current_script, success = await iterate_analysis_script(
                             file_names,
@@ -486,12 +576,11 @@ async def analyze_data(websocket: WebSocket):
                     logger.error("Analysis results JSON not found")
                     continue
                 
-                await websocket.send_json({"status": f"Generating HTML report..."})
+                await websocket.send_json({"status": "Generating report..."})
                 output_html_path = os.path.join(OUTPUT_DIR, 'report.html')
-                generate_html_report(analysis_json_path, output_html_path, websocket)
+                await generate_html_report(analysis_json_path, output_html_path, websocket)
                 
                 # Convert HTML to PDF
-                await websocket.send_json({"status": f"Preparing everything for download..."})
                 output_pdf_path = os.path.join(OUTPUT_DIR, 'report.pdf')
                 generate_pdf_from_html(output_html_path, output_pdf_path, websocket)
                 

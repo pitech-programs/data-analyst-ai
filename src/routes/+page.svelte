@@ -19,6 +19,10 @@
 	let analysisClient;
 	let isAnalyzing = false;
 	let messageContainer;
+	let dots = '';
+
+	// Add interval for animated dots
+	let dotsInterval;
 
 	$: console.log(aiMessage);
 
@@ -30,6 +34,9 @@
 	onDestroy(() => {
 		if (analysisClient) {
 			analysisClient.disconnect();
+		}
+		if (dotsInterval) {
+			clearInterval(dotsInterval);
 		}
 	});
 
@@ -103,20 +110,27 @@
 		htmlContent = '';
 		pdfContent = '';
 		currentStatus = 'Starting analysis...';
+		dots = '';
+
+		// Start dots animation
+		dotsInterval = setInterval(() => {
+			dots = dots.length >= 3 ? '' : dots + '.';
+		}, 500);
 
 		try {
 			await analysisClient.analyzeFiles(selectedFiles, analysisPrompt, {
 				onError: (error) => {
 					currentStatus = `Error: ${error}`;
 					isAnalyzing = false;
+					clearInterval(dotsInterval);
 				},
 				onStatus: (status) => {
-					currentStatus =
-						status === 'completed'
-							? '🎉 Analysis completed successfully! Your reports are ready below.'
-							: status;
 					if (status === 'completed') {
+						currentStatus = '🎉 Analysis completed successfully! Your reports are ready below.';
 						isAnalyzing = false;
+						clearInterval(dotsInterval);
+					} else {
+						currentStatus = status;
 					}
 				},
 				onContent: (content) => {
@@ -137,6 +151,7 @@
 		} catch (error) {
 			currentStatus = `Error: ${error.message}`;
 			isAnalyzing = false;
+			clearInterval(dotsInterval);
 		}
 	}
 </script>
@@ -203,6 +218,28 @@
 		<!-- AI Status Section -->
 		<div class="bg-gray-800 rounded-xl p-6 border border-gray-700 shadow-lg overflow-hidden">
 			<h2 class="text-xl font-semibold mb-4">AI Status</h2>
+
+			<!-- Current Status -->
+			<div class="mb-4 p-3 bg-gray-700 rounded-lg">
+				<p class="text-blue-400 font-medium flex items-center">
+					<svg
+						class="w-5 h-5 mr-2 {isAnalyzing ? 'animate-spin' : ''}"
+						fill="none"
+						stroke="currentColor"
+						viewBox="0 0 24 24"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+						/>
+					</svg>
+					{currentStatus}{isAnalyzing ? dots : ''}
+				</p>
+			</div>
+
+			<!-- AI Message Container -->
 			<div bind:this={messageContainer} class="h-[300px] overflow-y-auto space-y-2 relative">
 				<div
 					class="sticky top-0 inset-x-0 h-16 bg-gradient-to-b from-gray-800/90 via-gray-800/30 to-transparent pointer-events-none backdrop-blur-[2px] z-10"
@@ -212,7 +249,7 @@
 						<div
 							class="text-gray-300 animate-fade-in prose prose-invert prose-headings:text-blue-400 prose-h3:text-2xl prose-h3:font-semibold prose-h3:mt-6 prose-p:my-4 prose-p:whitespace-pre-line max-w-none"
 						>
-							{@html marked.parse(aiMessage)}
+							{@html marked.parse(aiMessage, { breaks: true })}
 						</div>
 					</div>
 				{/if}
@@ -248,9 +285,6 @@
 		<!-- Results Section -->
 		<div class="bg-gray-800 rounded-xl p-6 border border-gray-700 shadow-lg">
 			<h2 class="text-xl font-semibold mb-4">Results</h2>
-			<div class="mb-4">
-				<p class="text-lg text-blue-400">{currentStatus}</p>
-			</div>
 
 			{#if htmlContent && pdfContent}
 				<div class="space-y-4">
@@ -331,5 +365,18 @@
 			opacity: 1;
 			transform: translateY(0);
 		}
+	}
+
+	@keyframes spin {
+		from {
+			transform: rotate(0deg);
+		}
+		to {
+			transform: rotate(360deg);
+		}
+	}
+
+	.animate-spin {
+		animation: spin 1s linear infinite;
 	}
 </style>
