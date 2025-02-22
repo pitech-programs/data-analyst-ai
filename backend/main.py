@@ -69,6 +69,102 @@ class ConnectionManager:
 # Instantiate the connection manager
 manager = ConnectionManager()
 
+async def analyze_file_structure(file_name: str, file_path: str) -> tuple[str, dict]:
+    """
+    Analyze the structure of a file based on its type.
+    Returns a tuple of (structure_description, metadata)
+    """
+    file_extension = file_name.lower().split('.')[-1]
+    
+    try:
+        if file_extension in ['csv', 'txt']:
+            import pandas as pd
+            df = pd.read_csv(file_path)
+            structure = f"\nFile: {file_name}\nColumns: {', '.join(df.columns)}\nFirst three rows:\n{df.head(3).to_string()}\n"
+            metadata = {
+                "type": "tabular",
+                "rows": len(df),
+                "columns": len(df.columns)
+            }
+            return structure, metadata
+            
+        elif file_extension == 'xlsx':
+            import pandas as pd
+            df = pd.read_excel(file_path)
+            structure = f"\nFile: {file_name}\nColumns: {', '.join(df.columns)}\nFirst three rows:\n{df.head(3).to_string()}\n"
+            metadata = {
+                "type": "tabular",
+                "rows": len(df),
+                "columns": len(df.columns)
+            }
+            return structure, metadata
+            
+        elif file_extension == 'json':
+            import json
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            
+            def analyze_json_structure(obj, max_depth=3, current_depth=0):
+                if current_depth >= max_depth:
+                    return "..."
+                
+                if isinstance(obj, dict):
+                    structure = "{\n"
+                    for key, value in list(obj.items())[:5]:  # Limit to first 5 keys
+                        structure += "  " * (current_depth + 1)
+                        structure += f'"{key}": '
+                        if isinstance(value, (dict, list)):
+                            structure += analyze_json_structure(value, max_depth, current_depth + 1)
+                        else:
+                            structure += f"{type(value).__name__}"
+                        structure += ",\n"
+                    if len(obj) > 5:
+                        structure += "  " * (current_depth + 1) + "...\n"
+                    structure += "  " * current_depth + "}"
+                    return structure
+                
+                elif isinstance(obj, list):
+                    if not obj:
+                        return "[]"
+                    structure = "[\n"
+                    for item in obj[:3]:  # Limit to first 3 items
+                        structure += "  " * (current_depth + 1)
+                        if isinstance(item, (dict, list)):
+                            structure += analyze_json_structure(item, max_depth, current_depth + 1)
+                        else:
+                            structure += f"{type(item).__name__}"
+                        structure += ",\n"
+                    if len(obj) > 3:
+                        structure += "  " * (current_depth + 1) + "...\n"
+                    structure += "  " * current_depth + "]"
+                    return structure
+                
+                return str(type(obj).__name__)
+            
+            structure = f"\nFile: {file_name}\nStructure:\n{analyze_json_structure(data)}\n"
+            
+            def count_items(obj):
+                if isinstance(obj, dict):
+                    return len(obj)
+                elif isinstance(obj, list):
+                    return len(obj)
+                return 1
+            
+            metadata = {
+                "type": "json",
+                "top_level_items": count_items(data)
+            }
+            return structure, metadata
+            
+        else:
+            structure = f"\nFile: {file_name}\nUnsupported file type: {file_extension}\n"
+            metadata = {"type": "unsupported"}
+            return structure, metadata
+            
+    except Exception as e:
+        logger.warning(f"Could not read structure for {file_name}: {str(e)}")
+        return f"\nFile: {file_name}\nStructure could not be read: {str(e)}\n", {"type": "error"}
+
 # Generate Python code for data analysis using OpenAI API
 async def generate_analysis_code(file_names: List[str], analysis_prompt: str, websocket: WebSocket) -> str:
     """
@@ -79,23 +175,27 @@ async def generate_analysis_code(file_names: List[str], analysis_prompt: str, we
 
     await websocket.send_json({"content": "🔍 Analyzing your files and preparing the data analysis strategy...\n\n"})
 
-    # Read CSV structure information
+    # Read file structures
     file_structures = []
+    file_metadata = {}
+    
     for file_name in file_names:
-        try:
-            import pandas as pd
-            file_path = os.path.join(INPUT_DIR, file_name)
-            df = pd.read_csv(file_path)
-            structure = f"\nFile: {file_name}\nColumns: {', '.join(df.columns)}\nFirst three rows:\n{df.head(3).to_string()}\n"
-            file_structures.append(structure)
+        file_path = os.path.join(INPUT_DIR, file_name)
+        structure, metadata = await analyze_file_structure(file_name, file_path)
+        file_structures.append(structure)
+        file_metadata[file_name] = metadata
+        
+        if metadata["type"] == "tabular":
             await websocket.send_json({
-                "content": f"📊 Analyzed {file_name}:\n- Found {len(df.columns)} columns\n- {len(df):,} rows of data\n\n"
+                "content": f"📊 Analyzed {file_name}:\n- Found {metadata['columns']} columns\n- {metadata['rows']:,} rows of data\n\n"
             })
-        except Exception as e:
-            logger.warning(f"Could not read structure for {file_name}: {str(e)}")
-            file_structures.append(f"\nFile: {file_name}\nStructure could not be read.")
+        elif metadata["type"] == "json":
             await websocket.send_json({
-                "content": f"⚠️ Could not analyze {file_name}: {str(e)}\n\n"
+                "content": f"🔍 Analyzed {file_name}:\n- JSON data with {metadata['top_level_items']} top-level items\n\n"
+            })
+        elif metadata["type"] == "error":
+            await websocket.send_json({
+                "content": f"⚠️ Could not analyze {file_name}: {structure}\n\n"
             })
 
     await websocket.send_json({
@@ -104,7 +204,7 @@ async def generate_analysis_code(file_names: List[str], analysis_prompt: str, we
 
     messages = [{
         "role": "system",
-        "content": """You are a data analysis assistant with expertise in Python, pandas and matplotlib. 
+        "content": """You are a data analysis assistant with expertise in Python, pandas, matplotlib, and JSON data processing. 
 Write clean, efficient Python code that produces insightful analysis and clear visualizations."""
     }, {
         "role": "user",
@@ -115,22 +215,39 @@ Write clean, efficient Python code that produces insightful analysis and clear v
 - set plt.style.use('default') at the beginning of the script
 
 2. Data Processing:
-- Read the following CSV files from the 'input' directory: {', '.join(file_names)}.
-- Clean the data as needed
+The following files need to be processed from the 'input' directory: {', '.join(file_names)}
 
-File structures:
+File types and structures:
 {''.join(file_structures)}
 
+Loading instructions by file type:
+{
+    ''.join([
+        f"- {file_name}: Use " + (
+            "pd.read_csv()" if metadata['type'] == 'tabular' and file_name.endswith('.csv') else
+            "pd.read_excel()" if metadata['type'] == 'tabular' and file_name.endswith('.xlsx') else
+            "pd.read_csv()" if metadata['type'] == 'tabular' and file_name.endswith('.txt') else
+            "json.load()" if metadata['type'] == 'json' else
+            "# Unsupported file type"
+        ) + "\n"
+        for file_name, metadata in file_metadata.items()
+    ])
+}
 
 3. Required Analysis:
-- Calculate basic statistics (mean, median, etc.)
-- Identify patterns and trends
-- Find correlations if applicable
-- Create at least 2 relevant plots:
+- For tabular data:
+  * Calculate basic statistics (mean, median, etc.)
+  * Identify patterns and trends
+  * Find correlations if applicable
+- For JSON data:
+  * Analyze the structure and relationships
+  * Extract key metrics and patterns
+  * Identify common values or trends
+- Create at least 3 relevant plots:
   * Save as PNG files in 'output' directory
   * Use clear labels and titles
   * Make them easy to read
-  * all plots should have a similar style
+  * All plots should have a similar style
 
 4. Additional analysis requirements:
 {analysis_prompt}
@@ -167,9 +284,10 @@ File structures:
     }},
     "metadata": {{
         "analysis_duration": "Time taken",
-        "data_sources": {file_names}
-        "rows_analyzed": "Count",
-        "columns_analyzed": "List"
+        "data_sources": {file_names},
+        "file_types": {str({name: meta["type"] for name, meta in file_metadata.items()})},
+        "rows_analyzed": "Count per file",
+        "columns_analyzed": "List per file"
     }}
 }}
 
@@ -177,6 +295,7 @@ Do not use any try except blocks - we will deal with errors in another way.
 Do not handle errors in the code, we will deal with them in the iteration process.
 """
     }]
+
 
     try:
         logger.info("Making API call to OpenAI")
@@ -504,119 +623,165 @@ async def analyze_data(websocket: WebSocket):
     await manager.connect(websocket)
     logger.info("New WebSocket connection established")
     
+    # Dictionary to store file chunks
+    file_chunks = {}
+    
     try:
         while True:
             try:
                 # Receive data from WebSocket
                 data = await websocket.receive_json()
-                logger.info("Received WebSocket data for analysis")
+                message_type = data.get('type', '')
                 
-                # Extract parameters from the received data
-                files_data = data.get("files", [])
-                analysis_prompt = data.get("prompt", "")
-                
-                logger.info(f"Analysis request: {len(files_data)} files")
-                
-                # Check if files and prompt are provided
-                if not files_data or not analysis_prompt:
-                    logger.warning("Missing required parameters: files or prompt")
-                    continue
-                
-                # Save CSV files to input directory
-                file_names = []
-                for file_data in files_data:
-                    file_name = file_data['name']
-                    file_content = file_data['content']
-                    file_path = os.path.join(INPUT_DIR, file_name)
-                    logger.info(f"Saving input file: {file_name}")
-                    with open(file_path, 'w') as f:
-                        f.write(file_content)
-                    file_names.append(file_name)
-                
-                # Generate and save analysis code
-                analysis_code = await generate_analysis_code(file_names, analysis_prompt, websocket)
-                script_path = os.path.join(TEMP_DIR, 'analysis_script.py')
-                with open(script_path, 'w') as f:
-                    f.write(analysis_code)
-                
-                # Execute the analysis script with retries
-                max_retries = 5
-                current_retry = 0
-                current_script = analysis_code
-                success = False
-
-                while current_retry < max_retries and not success:
-                    try:
-                        await execute_analysis_script(script_path, websocket)
-                        if os.path.exists(os.path.join(OUTPUT_DIR, 'analysis_results.json')):
-                            success = True
-                            break
-                    except Exception as e:
-                        error_message = str(e)
-                        logger.error(f"Analysis script failed (attempt {current_retry + 1}/{max_retries}): {error_message}")
-                        await websocket.send_json({"status": "Retrying analysis..."})
+                if message_type == 'analysis_start':
+                    # Initialize file chunks for each file
+                    file_names = data.get('fileNames', [])
+                    prompt = data.get('prompt', '')
+                    
+                    for file_name in file_names:
+                        file_chunks[file_name] = {
+                            'chunks': [],
+                            'total_chunks': None,
+                            'received_chunks': 0
+                        }
+                    
+                    logger.info(f"Starting analysis for files: {file_names}")
+                    
+                elif message_type == 'file_chunk':
+                    # Process file chunk
+                    file_name = data.get('fileName')
+                    chunk_index = data.get('chunkIndex')
+                    total_chunks = data.get('totalChunks')
+                    content = data.get('content')
+                    
+                    if file_name not in file_chunks:
+                        raise Exception(f"Received chunk for unknown file: {file_name}")
+                    
+                    file_info = file_chunks[file_name]
+                    if file_info['total_chunks'] is None:
+                        file_info['total_chunks'] = total_chunks
+                        file_info['chunks'] = [None] * total_chunks
+                    
+                    file_info['chunks'][chunk_index] = content
+                    file_info['received_chunks'] += 1
+                    
+                    # Send acknowledgment
+                    await websocket.send_json({
+                        'type': 'chunk_received',
+                        'fileName': file_name,
+                        'chunkIndex': chunk_index
+                    })
+                    
+                    logger.info(f"Received chunk {chunk_index + 1}/{total_chunks} for {file_name}")
+                    
+                elif message_type == 'analysis_ready':
+                    # All files received, start analysis
+                    logger.info("All files received, starting analysis")
+                    
+                    # Save complete files
+                    for file_name, file_info in file_chunks.items():
+                        if file_info['received_chunks'] != file_info['total_chunks']:
+                            raise Exception(f"Incomplete file received: {file_name}")
                         
-                        current_script, success = await iterate_analysis_script(
-                            file_names,
-                            analysis_prompt,
-                            current_script,
-                            error_message,
-                            websocket
+                        complete_content = ''.join(file_info['chunks'])
+                        file_path = os.path.join(INPUT_DIR, file_name)
+                        
+                        with open(file_path, 'w') as f:
+                            f.write(complete_content)
+                    
+                    # Generate and save analysis code
+                    try:
+                        analysis_code = await generate_analysis_code(list(file_chunks.keys()), prompt, websocket)
+                        script_path = os.path.join(TEMP_DIR, 'analysis_script.py')
+                        with open(script_path, 'w') as f:
+                            f.write(analysis_code)
+                        logger.info("Successfully generated and saved analysis code")
+                    except Exception as e:
+                        logger.error(f"Error generating analysis code: {str(e)}")
+                        await websocket.send_json({"error": f"Error generating analysis code: {str(e)}"})
+                        continue
+                    
+                    # Execute the analysis script with retries
+                    max_retries = 5
+                    current_retry = 0
+                    current_script = analysis_code
+                    success = False
+
+                    while current_retry < max_retries and not success:
+                        try:
+                            await execute_analysis_script(script_path, websocket)
+                            if os.path.exists(os.path.join(OUTPUT_DIR, 'analysis_results.json')):
+                                success = True
+                                break
+                        except Exception as e:
+                            error_message = str(e)
+                            logger.error(f"Analysis script failed (attempt {current_retry + 1}/{max_retries}): {error_message}")
+                            await websocket.send_json({"status": "Retrying analysis..."})
+                            
+                            current_script, success = await iterate_analysis_script(
+                                list(file_chunks.keys()),
+                                prompt,
+                                current_script,
+                                error_message,
+                                websocket
+                            )
+                            if success:
+                                break
+                            current_retry += 1
+
+                    if not success:
+                        raise Exception("Failed to execute analysis script after maximum retries")
+
+                    # Generate HTML report from analysis results
+                    analysis_json_path = os.path.join(OUTPUT_DIR, 'analysis_results.json')
+                    if not os.path.exists(analysis_json_path):
+                        logger.error("Analysis results JSON not found")
+                        continue
+                    
+                    await websocket.send_json({"status": "Generating report..."})
+                    output_html_path = os.path.join(OUTPUT_DIR, 'report.html')
+                    await generate_html_report(analysis_json_path, output_html_path, websocket)
+                    
+                    # Convert HTML to PDF
+                    output_pdf_path = os.path.join(OUTPUT_DIR, 'report.pdf')
+                    generate_pdf_from_html(output_html_path, output_pdf_path, websocket)
+                    
+                    # Read file contents
+                    with open(output_html_path, 'r', encoding='utf-8') as f:
+                        html_content = f.read()
+                    with open(output_pdf_path, 'rb') as f:
+                        pdf_content = f.read()
+                    
+                    # Read image files and encode them
+                    with open(analysis_json_path, 'r') as f:
+                        analysis_data = json.load(f)
+                    
+                    image_data = {}
+                    visualizations = analysis_data.get('visualizations', {})
+                    for plot_path in visualizations.get('plots', []):
+                        full_path = os.path.join(OUTPUT_DIR, os.path.basename(plot_path))
+                        if os.path.exists(full_path):
+                            with open(full_path, 'rb') as f:
+                                image_content = f.read()
+                                image_data[os.path.basename(plot_path)] = base64.b64encode(image_content).decode('utf-8')
+                    
+                    # Modify HTML content to use base64 encoded images
+                    for image_name, image_content in image_data.items():
+                        html_content = html_content.replace(
+                            f'src="{image_name}"',
+                            f'src="data:image/png;base64,{image_content}"'
                         )
-                        if success:
-                            break
-                        current_retry += 1
-
-                if not success:
-                    raise Exception("Failed to execute analysis script after maximum retries")
-
-                # Generate HTML report from analysis results
-                analysis_json_path = os.path.join(OUTPUT_DIR, 'analysis_results.json')
-                if not os.path.exists(analysis_json_path):
-                    logger.error("Analysis results JSON not found")
-                    continue
-                
-                await websocket.send_json({"status": "Generating report..."})
-                output_html_path = os.path.join(OUTPUT_DIR, 'report.html')
-                await generate_html_report(analysis_json_path, output_html_path, websocket)
-                
-                # Convert HTML to PDF
-                output_pdf_path = os.path.join(OUTPUT_DIR, 'report.pdf')
-                generate_pdf_from_html(output_html_path, output_pdf_path, websocket)
-                
-                # Read file contents
-                with open(output_html_path, 'r', encoding='utf-8') as f:
-                    html_content = f.read()
-                with open(output_pdf_path, 'rb') as f:
-                    pdf_content = f.read()
-                
-                # Read image files and encode them
-                with open(analysis_json_path, 'r') as f:
-                    analysis_data = json.load(f)
-                
-                image_data = {}
-                visualizations = analysis_data.get('visualizations', {})
-                for plot_path in visualizations.get('plots', []):
-                    full_path = os.path.join(OUTPUT_DIR, os.path.basename(plot_path))
-                    if os.path.exists(full_path):
-                        with open(full_path, 'rb') as f:
-                            image_content = f.read()
-                            image_data[os.path.basename(plot_path)] = base64.b64encode(image_content).decode('utf-8')
-                
-                # Modify HTML content to use base64 encoded images
-                for image_name, image_content in image_data.items():
-                    html_content = html_content.replace(
-                        f'src="{image_name}"',
-                        f'src="data:image/png;base64,{image_content}"'
-                    )
-                
-                # Send completion message with file contents
-                await websocket.send_json({
-                    "status": "completed",
-                    "html_content": html_content,
-                    "pdf_content": base64.b64encode(pdf_content).decode('utf-8'),
-                    "image_data": image_data
-                })
+                    
+                    # Send completion message with file contents
+                    await websocket.send_json({
+                        "status": "completed",
+                        "html_content": html_content,
+                        "pdf_content": base64.b64encode(pdf_content).decode('utf-8'),
+                        "image_data": image_data
+                    })
+                    
+                    # Clear file chunks
+                    file_chunks.clear()
                 
             except WebSocketDisconnect:
                 logger.info("WebSocket disconnected")

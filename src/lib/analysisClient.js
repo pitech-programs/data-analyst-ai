@@ -81,27 +81,30 @@ export class AnalysisClient {
 		try {
 			await connectAndWait();
 
-			// Convert files to the format expected by the server
-			const filePromises = Array.from(files).map(async (file) => {
-				return {
-					name: file.name,
-					content: await this.readFileContent(file)
-				};
-			});
-
-			const processedFiles = await Promise.all(filePromises);
-
-			// Send the analysis request
+			// Send initial analysis request
 			const message = {
-				files: processedFiles,
+				type: 'analysis_start',
+				fileNames: Array.from(files).map((f) => f.name),
 				prompt
 			};
-
 			this.ws.send(JSON.stringify(message));
+
+			// Send each file in chunks
+			for (const file of files) {
+				await this.sendFileInChunks(file);
+			}
+
+			// Send analysis complete message
+			this.ws.send(JSON.stringify({ type: 'analysis_ready' }));
 
 			// Set up message handling
 			this.ws.onmessage = (event) => {
 				const response = JSON.parse(event.data);
+
+				if (response.type === 'chunk_received') {
+					// Handle chunk acknowledgment
+					return;
+				}
 
 				if (response.error) {
 					callbacks.onError?.(response.error);
@@ -144,5 +147,57 @@ export class AnalysisClient {
 				reader.readAsText(file);
 			}
 		});
+	}
+
+	async sendFileInChunks(file) {
+		const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+		const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+		for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+			const start = chunkIndex * CHUNK_SIZE;
+			const end = Math.min(start + CHUNK_SIZE, file.size);
+			const chunk = file.slice(start, end);
+
+			const chunkContent = await new Promise((resolve, reject) => {
+				const reader = new FileReader();
+				reader.onload = (e) => resolve(e.target.result);
+				reader.onerror = reject;
+
+				if (file.name.endsWith('.csv') || file.name.endsWith('.txt')) {
+					reader.readAsText(chunk);
+				} else if (file.name.endsWith('.xlsx')) {
+					reader.readAsBinaryString(chunk);
+				} else {
+					reader.readAsText(chunk);
+				}
+			});
+
+			const message = {
+				type: 'file_chunk',
+				fileName: file.name,
+				chunkIndex,
+				totalChunks,
+				content: chunkContent,
+				isLastChunk: chunkIndex === totalChunks - 1
+			};
+
+			this.ws.send(JSON.stringify(message));
+
+			// Wait for server acknowledgment before sending next chunk
+			await new Promise((resolve) => {
+				const handler = (event) => {
+					const response = JSON.parse(event.data);
+					if (
+						response.type === 'chunk_received' &&
+						response.fileName === file.name &&
+						response.chunkIndex === chunkIndex
+					) {
+						this.ws.removeEventListener('message', handler);
+						resolve();
+					}
+				};
+				this.ws.addEventListener('message', handler);
+			});
+		}
 	}
 }
