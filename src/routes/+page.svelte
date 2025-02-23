@@ -329,7 +329,7 @@
 			<!-- AI Message Container -->
 			<div
 				bind:this={messageContainer}
-				class="max-h-[200px] overflow-y-auto overflow-x-hidden space-y-2 relative"
+				class="max-h-[200px] overflow-y-hidden overflow-x-hidden space-y-2 relative"
 			>
 				<div
 					class="sticky top-0 inset-x-0 h-20 bg-gradient-to-b from-gray-800/90 via-gray-800/30 to-transparent pointer-events-none backdrop-blur-[1.3px] z-10"
