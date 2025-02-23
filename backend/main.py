@@ -13,6 +13,7 @@ from dotenv import load_dotenv # type: ignore
 import logging
 import uvicorn # type: ignore
 import base64
+from elevenlabs.client import ElevenLabs # type: ignore
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,12 @@ load_dotenv()
 
 # Initialize OpenAI client
 openai.api_key = os.getenv("OPENAI_API_KEY")
+
+# Initialize ElevenLabs
+elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY")
+if not elevenlabs_api_key:
+    logger.warning("ELEVENLABS_API_KEY not found in environment variables")
+elevenlabs_client = ElevenLabs(api_key=elevenlabs_api_key) if elevenlabs_api_key else None
 
 # Create FastAPI app
 app = FastAPI()
@@ -532,16 +539,18 @@ REQUIREMENTS:
    - Key findings summary
    - Data quality overview
    - Statistical results
-   - Visualizations with descriptions
+   - Visualizations with descriptions (explain each plots meaning)
    - Analysis metadata footer
 
 3. Design Features:
    - Clean, professional layout
+   - Fill the page with the actual analysis data
+   - It has to be in light mode
    - Responsive design (mobile and desktop)
    - Card-based content sections
    - Clear typography and spacing
 
-Return only the complete HTML code with all required scripts and styles included."""
+Return only the complete HTML code with all required scripts, values and styles included."""
         }]
 
         # Make API call to OpenAI
@@ -614,6 +623,98 @@ def generate_pdf_from_html(html_path: str, pdf_path: str, websocket: WebSocket):
         logger.info(f"Successfully generated PDF at {pdf_path}")
     except Exception as e:
         logger.error(f"Failed to generate PDF: {str(e)}")
+        raise
+
+async def generate_verbal_summary(analysis_data: dict, websocket: WebSocket) -> str:
+    """
+    Generate a verbal summary of the analysis results using OpenAI.
+    """
+    logger.info("Generating verbal summary of analysis")
+    try:
+        messages = [{
+            "role": "system",
+            "content": """You are an expert data analyst presenting findings to a client. 
+Create a clear, concise verbal summary of the data analysis results that would sound natural when spoken.
+Focus on the most important findings and insights. Use natural, conversational language."""
+        }, {
+            "role": "user",
+            "content": f"""Create a verbal summary of this data analysis that will be converted to speech:
+
+ANALYSIS DATA:
+{json.dumps(analysis_data, indent=2)}
+
+Requirements:
+1. Start with a brief introduction
+2. Focus on key findings and insights
+3. Highlight important patterns or trends
+4. Use natural, conversational language
+5. Keep it concise (2-3 minutes when spoken)
+6. End with a brief conclusion
+
+The summary should flow naturally when spoken and avoid technical jargon unless necessary."""
+        }]
+
+        await websocket.send_json({
+            "content": "🎙️ Generating verbal summary of the analysis...\n\n"
+        })
+
+        client = openai.OpenAI()
+        stream = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=800,
+            stream=True
+        )
+        
+        full_summary = ""
+        for chunk in stream:
+            if chunk and chunk.choices and chunk.choices[0].delta.content:
+                content = chunk.choices[0].delta.content
+                full_summary += content
+                await websocket.send_json({
+                    "content": content
+                })
+        
+        logger.info("Successfully generated verbal summary")
+        return full_summary
+
+    except Exception as e:
+        logger.error(f"Failed to generate verbal summary: {str(e)}")
+        raise
+
+async def generate_speech(text: str, websocket: WebSocket) -> bytes:
+    """
+    Convert text to speech using ElevenLabs API.
+    """
+    logger.info("Converting summary to speech")
+    try:
+        await websocket.send_json({
+            "content": "🔊 Converting summary to speech...\n\n"
+        })
+
+        if not elevenlabs_client:
+            raise Exception("ElevenLabs client not initialized - missing API key")
+
+        # Using Rachel voice by default, with a balanced speaking style
+        audio_stream = elevenlabs_client.text_to_speech.convert(
+            text=text,
+            voice_id="JBFqnCBsd6RMkjVDRZzb",  # Rachel voice ID
+            model_id="eleven_turbo_v2_5",
+            output_format="mp3_44100_128"
+        )
+        
+        # Collect all bytes from the generator
+        audio_bytes = b''
+        for chunk in audio_stream:
+            if isinstance(chunk, bytes):
+                audio_bytes += chunk
+        
+        logger.info("Successfully generated speech audio")
+        return audio_bytes
+
+    except Exception as e:
+        logger.error(f"Failed to generate speech: {str(e)}")
         raise
 
 # WebSocket endpoint for data analysis
@@ -772,12 +873,26 @@ async def analyze_data(websocket: WebSocket):
                             f'src="data:image/png;base64,{image_content}"'
                         )
                     
-                    # Send completion message with file contents
+                    # Generate verbal summary and speech
+                    try:
+                        verbal_summary = await generate_verbal_summary(analysis_data, websocket)
+                        audio_content = await generate_speech(verbal_summary, websocket)
+                        audio_base64 = base64.b64encode(audio_content).decode('utf-8')
+                    except Exception as e:
+                        logger.error(f"Failed to generate speech content: {str(e)}")
+                        audio_base64 = None
+                        await websocket.send_json({
+                            "content": f"⚠️ Could not generate speech: {str(e)}\n\n"
+                        })
+                    
+                    # Send completion message with all content
                     await websocket.send_json({
                         "status": "completed",
                         "html_content": html_content,
                         "pdf_content": base64.b64encode(pdf_content).decode('utf-8'),
-                        "image_data": image_data
+                        "image_data": image_data,
+                        "audio_content": audio_base64,
+                        "verbal_summary": verbal_summary if audio_base64 else None
                     })
                     
                     # Clear file chunks

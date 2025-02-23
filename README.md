@@ -16,6 +16,14 @@ source: Kaggle <link>https://www.kaggle.com/datasets/asinow/car-price-dataset/da
 
 This is the backend service for the Data Analysis Dashboard. It provides WebSocket-based API endpoints for analyzing data using OpenAI's GPT-4o-mini.
 
+**Key Features:**
+
+- **Versatile Data Analysis:** Analyzes various file types including CSV, XLSX, JSON, and TXT, adapting to different data schemas and sizes.
+- **AI-Powered Code Generation:** Leverages OpenAI's `gpt-4o-mini` to dynamically generate Python scripts tailored to your data and analysis prompts.
+- **Iterative Script Improvement:** Automatically debugs and refines the generated analysis scripts based on execution errors, ensuring robust analysis.
+- **Comprehensive Reporting:** Generates detailed analysis reports in both HTML and PDF formats, including insightful visualizations.
+- **Real-time Communication:** Uses WebSocket for real-time interaction, providing status updates and streaming analysis results directly to the dashboard.
+
 ## Prerequisites
 
 1. Python 3.8 or higher
@@ -38,11 +46,8 @@ pip install -r requirements.txt
 
 3. Set up environment variables:
 
-```bash
-cp .env.example .env
-```
-
-Then edit `.env` and add your OpenAI API key.
+Create a `.env` file in the root directory and add your OpenAI API key `OPENAI_API_KEY=your_api_key`.
+Then source the `.env` file: `source .env`.
 
 ## Running the Server
 
@@ -71,3 +76,10 @@ Accepts WebSocket connections for real-time data analysis. Send JSON data in the
 	"prompt": "Analyze sales trends"
 }
 ```
+
+Future improvements:
+
+- Add support for local LLM analysis
+- Add Q&A mode for the Data sets
+  - should be able to answer questions about the data sets
+- Add support to interactively refine the report to your wishes

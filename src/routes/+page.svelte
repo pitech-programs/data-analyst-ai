@@ -16,13 +16,55 @@
 	let htmlContent = '';
 	let pdfContent = '';
 	let imageData = {};
+	let audioContent = '';
+	let verbalSummary = '';
+	let audioPlayer;
+	let isPlaying = false;
+	let currentTime = 0;
+	let duration = 0;
 	let analysisClient;
 	let isAnalyzing = false;
 	let messageContainer;
 	let dots = '';
+	let streamingVerbalSummary = '';
+	let isGeneratingSummary = false;
+	let showTranscript = false;
 
 	// Add interval for animated dots
 	let dotsInterval;
+
+	function formatTime(seconds) {
+		const mins = Math.floor(seconds / 60);
+		const secs = Math.floor(seconds % 60);
+		return `${mins}:${secs.toString().padStart(2, '0')}`;
+	}
+
+	function handlePlayPause() {
+		if (audioPlayer) {
+			if (isPlaying) {
+				audioPlayer.pause();
+			} else {
+				audioPlayer.play();
+			}
+			isPlaying = !isPlaying;
+		}
+	}
+
+	function handleTimeUpdate(event) {
+		currentTime = event.target.currentTime;
+	}
+
+	function handleDurationChange(event) {
+		duration = event.target.duration;
+	}
+
+	function handleSeek(event) {
+		if (audioPlayer) {
+			const seekTime = event.target.value;
+			audioPlayer.currentTime = seekTime;
+			currentTime = seekTime;
+		}
+	}
 
 	$: console.log(aiMessage);
 
@@ -142,10 +184,23 @@
 						}, 0);
 					}
 				},
-				onComplete: ({ htmlContent: html, pdfContent: pdf, imageData: images }) => {
+				onVerbalSummaryChunk: (chunk) => {
+					streamingVerbalSummary += chunk;
+					isGeneratingSummary = true;
+				},
+				onComplete: ({
+					htmlContent: html,
+					pdfContent: pdf,
+					imageData: images,
+					audioContent: audio,
+					verbalSummary: summary
+				}) => {
 					htmlContent = html;
 					pdfContent = pdf;
 					imageData = images;
+					audioContent = audio;
+					verbalSummary = summary;
+					isGeneratingSummary = false;
 				}
 			});
 		} catch (error) {
@@ -222,19 +277,21 @@
 			<!-- Current Status -->
 			<div class="mb-4 p-3 bg-gray-700 rounded-lg">
 				<p class="text-blue-400 font-medium flex items-center">
-					<svg
-						class="w-5 h-5 mr-2 {isAnalyzing ? 'animate-spin' : ''}"
-						fill="none"
-						stroke="currentColor"
-						viewBox="0 0 24 24"
-					>
-						<path
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							stroke-width="2"
-							d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-						/>
-					</svg>
+					{#if isAnalyzing}
+						<svg
+							class="w-5 h-5 mr-2 animate-spin"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+							/>
+						</svg>
+					{/if}
 					{currentStatus}{isAnalyzing ? dots : ''}
 				</p>
 			</div>
@@ -328,6 +385,135 @@
 						The HTML report provides an interactive experience, while the PDF is perfect for sharing
 						and printing.
 					</p>
+
+					<!-- Audio Player Section -->
+					{#if isGeneratingSummary || audioContent}
+						<div class="mt-6 bg-gray-700 rounded-lg p-4">
+							<h3 class="text-lg font-medium mb-3 text-gray-200">Audio Summary</h3>
+
+							{#if isGeneratingSummary}
+								<div class="space-y-3">
+									<!-- Streaming Summary -->
+									<div class="flex items-center space-x-2 text-blue-400">
+										<svg
+											class="w-5 h-5 animate-spin"
+											fill="none"
+											stroke="currentColor"
+											viewBox="0 0 24 24"
+										>
+											<path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												stroke-width="2"
+												d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+											></path>
+										</svg>
+										<span>Generating verbal summary...</span>
+									</div>
+									<div class="mt-4 p-3 bg-gray-800 rounded-lg text-sm text-gray-300">
+										<p class="whitespace-pre-line animate-pulse">{streamingVerbalSummary}</p>
+									</div>
+								</div>
+							{:else if audioContent}
+								<!-- Hidden Audio Element -->
+								<audio
+									bind:this={audioPlayer}
+									src={`data:audio/mp3;base64,${audioContent}`}
+									on:timeupdate={handleTimeUpdate}
+									on:durationchange={handleDurationChange}
+									on:ended={() => (isPlaying = false)}
+									class="hidden"
+								></audio>
+
+								<!-- Custom Audio Player UI -->
+								<div class="space-y-3">
+									<!-- Play/Pause Button and Time Display -->
+									<div class="flex items-center justify-between">
+										<button
+											on:click={handlePlayPause}
+											class="p-2 rounded-full bg-blue-600 hover:bg-blue-700 transition-colors"
+										>
+											{#if isPlaying}
+												<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="2"
+														d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"
+													/>
+												</svg>
+											{:else}
+												<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="2"
+														d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
+													/>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="2"
+														d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+													/>
+												</svg>
+											{/if}
+										</button>
+										<div class="text-sm text-gray-300">
+											{formatTime(currentTime)} / {formatTime(duration)}
+										</div>
+									</div>
+
+									<!-- Progress Bar -->
+									<input
+										type="range"
+										min="0"
+										max={duration}
+										value={currentTime}
+										on:input={handleSeek}
+										class="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
+									/>
+
+									<!-- Transcript Toggle -->
+									{#if verbalSummary}
+										<button
+											on:click={() => (showTranscript = !showTranscript)}
+											class="mt-4 text-sm text-blue-400 hover:text-blue-300 transition-colors flex items-center space-x-1"
+										>
+											<span>{showTranscript ? 'Hide' : 'Show'} Transcript</span>
+											<svg
+												class="w-4 h-4 transform transition-transform duration-200 {showTranscript
+													? 'rotate-180'
+													: ''}"
+												fill="none"
+												stroke="currentColor"
+												viewBox="0 0 24 24"
+											>
+												<path
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													stroke-width="2"
+													d="M19 9l-7 7-7-7"
+												/>
+											</svg>
+										</button>
+
+										<!-- Transcript Content with Animation -->
+										<div
+											class="overflow-hidden transition-all duration-300 ease-in-out"
+											style="max-height: {showTranscript
+												? '500px'
+												: '0px'}; opacity: {showTranscript ? '1' : '0'}"
+										>
+											<div class="mt-4 p-3 bg-gray-800 rounded-lg text-sm text-gray-300">
+												<p class="whitespace-pre-line">{verbalSummary}</p>
+											</div>
+										</div>
+									{/if}
+								</div>
+							{/if}
+						</div>
+					{/if}
 				</div>
 			{:else}
 				<div class="text-center py-8">

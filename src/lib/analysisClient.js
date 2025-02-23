@@ -114,7 +114,9 @@ export class AnalysisClient {
 						callbacks.onComplete?.({
 							htmlContent: response.html_content,
 							pdfContent: response.pdf_content,
-							imageData: response.image_data
+							imageData: response.image_data,
+							audioContent: response.audio_content,
+							verbalSummary: response.verbal_summary
 						});
 					}
 				} else if (response.content) {
