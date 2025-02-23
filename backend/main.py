@@ -402,6 +402,10 @@ Please provide a fixed version of the script that:
 3. Ensures proper error handling
 4. Validates data before processing
 5. Properly saves results to 'output/analysis_results.json'
+
+Do not use any try except blocks - we will deal with errors in another way.
+Do not handle errors in the code, we will deal with them in the iteration process.
+
 """
     }]
 
@@ -533,13 +537,15 @@ REQUIREMENTS:
 1. Document Setup:
    - Include this script tag in the head: <script src="https://unpkg.com/@tailwindcss/browser@4"></script>
    - Use proper meta tags and viewport settings
+   - Use tables to display the data where it makes sense
+   - Explain each plots meaning with a short sentence and have them below one another
    
 2. Core Sections:
    - Title and header
    - Key findings summary
    - Data quality overview
    - Statistical results
-   - Visualizations with descriptions (explain each plots meaning)
+   - Visualizations with descriptions 
    - Analysis metadata footer
 
 3. Design Features:
@@ -655,7 +661,7 @@ The summary should flow naturally when spoken and avoid technical jargon unless 
         }]
 
         await websocket.send_json({
-            "content": "🎙️ Generating verbal summary of the analysis...\n\n"
+            "status": "Generating verbal summary of the analysis..."
         })
 
         client = openai.OpenAI()
@@ -690,7 +696,7 @@ async def generate_speech(text: str, websocket: WebSocket) -> bytes:
     logger.info("Converting summary to speech")
     try:
         await websocket.send_json({
-            "content": "🔊 Converting summary to speech...\n\n"
+            "status": "Converting summary to speech..."
         })
 
         if not elevenlabs_client:
@@ -817,7 +823,7 @@ async def analyze_data(websocket: WebSocket):
                         except Exception as e:
                             error_message = str(e)
                             logger.error(f"Analysis script failed (attempt {current_retry + 1}/{max_retries}): {error_message}")
-                            await websocket.send_json({"status": "Retrying analysis..."})
+                            await websocket.send_json({"status": "Improving analysis..."})
                             
                             current_script, success = await iterate_analysis_script(
                                 list(file_chunks.keys()),
