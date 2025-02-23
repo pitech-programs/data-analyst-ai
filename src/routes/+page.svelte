@@ -211,11 +211,19 @@
 
 <div class="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 text-gray-100 p-8">
 	<div class="flex flex-col items-center mb-8">
-		<h1
-			class="text-5xl font-extrabold text-center bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-blue-500 to-purple-600 drop-shadow-lg tracking-tight pb-2"
-		>
-			AI Data Analysis Agent
-		</h1>
+		<div class="flex items-center justify-center gap-4">
+			<img
+				src="/favicon.svg"
+				alt="Logo"
+				class="w-12 h-12 filter invert brightness-200 scale-x-[-1]"
+			/>
+			<h1
+				class="text-5xl font-extrabold text-center bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-blue-500 to-purple-600 drop-shadow-lg tracking-tight pb-2"
+			>
+				AI Data Analysis Agent
+			</h1>
+			<img src="/favicon.svg" alt="Logo" class="w-12 h-12 filter invert brightness-200" />
+		</div>
 		<p class="text-blue-400 mt-2 text-lg font-medium tracking-wide">
 			Your Intelligent Data Companion
 		</p>
