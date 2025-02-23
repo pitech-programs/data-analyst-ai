@@ -17,7 +17,7 @@ from elevenlabs.client import ElevenLabs # type: ignore
 
 # Configuration Constants
 OPENAI_MODEL = "gpt-4o-mini"
-ELEVENLABS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb"  # Rachel voice
+ELEVENLABS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb" 
 ELEVENLABS_MODEL_ID = "eleven_turbo_v2_5"
 ELEVENLABS_OUTPUT_FORMAT = "mp3_44100_128"
 MAX_RETRIES = 5

@@ -10,7 +10,7 @@
 	});
 
 	let selectedFiles = [];
-	let analysisPrompt = 'What is the most expensive brand on average?';
+	let analysisPrompt = '';
 	let currentStatus = 'Waiting for files...';
 	let aiMessage = '';
 	let htmlContent = '';
@@ -319,13 +319,16 @@
 			</div>
 
 			<!-- AI Message Container -->
-			<div bind:this={messageContainer} class="h-[300px] overflow-y-hidden space-y-2 relative">
+			<div
+				bind:this={messageContainer}
+				class="max-h-[200px] overflow-y-auto overflow-x-hidden space-y-2 relative"
+			>
 				<div
 					class="sticky top-0 inset-x-0 h-20 bg-gradient-to-b from-gray-800/90 via-gray-800/30 to-transparent pointer-events-none backdrop-blur-[1.3px] z-10"
 				></div>
 				{#if aiMessage}
 					<div class="relative pt-4">
-						<div class="text-gray-300 animate-fade-in max-w-none">
+						<div class="text-gray-300 animate-fade-in max-w-none break-words">
 							{@html marked.parse(aiMessage, { breaks: true })}
 						</div>
 					</div>

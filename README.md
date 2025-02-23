@@ -77,7 +77,10 @@ Accepts WebSocket connections for real-time data analysis. Send JSON data in the
 }
 ```
 
-Future improvements:
+On the gpt-4o-mini model, one run will cost less than 0.01 USD.
+On the gpt-4o model, one run will be roughly 0.06 USD.
+
+## Future improvements:
 
 - Add support for local LLM analysis
 - Add Q&A mode for the Data sets
