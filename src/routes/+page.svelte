@@ -440,6 +440,7 @@
 								<h3 class="text-lg font-medium text-gray-200">Audio Summary</h3>
 								{#if audioContent}
 									<div class="relative">
+										<!-- svelte-ignore a11y_consider_explicit_label -->
 										<button
 											class="p-1.5 hover:bg-gray-600 rounded-full transition-colors"
 											on:click={() => {

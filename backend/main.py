@@ -6,7 +6,7 @@ import json
 import asyncio
 import os
 import subprocess
-from typing import List
+from typing import List, Dict, Any, Optional
 import openai
 from weasyprint import HTML # type: ignore
 from dotenv import load_dotenv # type: ignore
@@ -14,6 +14,25 @@ import logging
 import uvicorn # type: ignore
 import base64
 from elevenlabs.client import ElevenLabs # type: ignore
+
+# Configuration Constants
+OPENAI_MODEL = "gpt-4o-mini"
+ELEVENLABS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb"  # Rachel voice
+ELEVENLABS_MODEL_ID = "eleven_turbo_v2_5"
+ELEVENLABS_OUTPUT_FORMAT = "mp3_44100_128"
+MAX_RETRIES = 5
+
+# Directory Configuration
+TEMP_DIR = 'temp'
+INPUT_DIR = 'input'
+OUTPUT_DIR = 'output'
+REQUIRED_DIRS = [TEMP_DIR, INPUT_DIR, OUTPUT_DIR]
+
+# File paths
+ANALYSIS_SCRIPT_PATH = os.path.join(TEMP_DIR, 'analysis_script.py')
+ANALYSIS_RESULTS_PATH = os.path.join(OUTPUT_DIR, 'analysis_results.json')
+REPORT_HTML_PATH = os.path.join(OUTPUT_DIR, 'report.html')
+REPORT_PDF_PATH = os.path.join(OUTPUT_DIR, 'report.pdf')
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -43,15 +62,91 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Define directories for temporary, input, and output files
-TEMP_DIR = 'temp'
-INPUT_DIR = 'input'
-OUTPUT_DIR = 'output'
-
-# Create directories if they don't exist
-for dir_path in [TEMP_DIR, INPUT_DIR, OUTPUT_DIR]:
+# Create required directories
+for dir_path in REQUIRED_DIRS:
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
+
+# Helper Functions for OpenAI API calls
+async def stream_openai_response(
+    messages: List[Dict[str, Any]], 
+    websocket: Optional[WebSocket] = None, 
+    **kwargs
+) -> str:
+    """
+    Stream OpenAI API response and handle code blocks.
+    Returns the full response as a string.
+    
+    Args:
+        messages: List of message dictionaries for the OpenAI chat completion
+        websocket: Optional WebSocket to stream responses to
+        **kwargs: Additional arguments to pass to the OpenAI API
+        
+    Returns:
+        str: The complete response from OpenAI
+    """
+    logger.info("Making API call to OpenAI")
+    client = openai.OpenAI()
+    stream = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=messages,
+        stream=True,
+        **kwargs
+    )
+    
+    logger.info("Stream object created, beginning to process chunks")
+    full_response = ""
+    code_section = False
+    current_section = ""
+    
+    for chunk in stream:
+        if chunk and chunk.choices and chunk.choices[0].delta.content:
+            content = chunk.choices[0].delta.content
+            full_response += content
+            
+            # Check if we're entering or leaving a code block
+            if "```" in content:
+                if any(lang in content for lang in ["```python", "```html"]):
+                    code_section = True
+                    current_section = content[content.find("```"):] + "\n"
+                    continue
+                elif code_section:
+                    code_section = False
+                    if current_section and websocket:
+                        await websocket.send_json({
+                            "content": "🔧 Generated code. Now preparing to execute...\n\n"
+                        })
+                    current_section = ""
+                    continue
+            
+            if code_section:
+                current_section += content
+            elif websocket and content.strip():
+                await websocket.send_json({"content": content})
+    
+    logger.info("Received complete response from OpenAI")
+    return full_response
+
+def extract_code_from_response(response: str, language: str = "python") -> str:
+    """
+    Extract code from a response containing markdown code blocks.
+    
+    Args:
+        response: The full response containing markdown code blocks
+        language: The programming language to extract (default: "python")
+        
+    Returns:
+        str: The extracted code
+        
+    Raises:
+        Exception: If no code block is found for the specified language
+    """
+    import re
+    pattern = f"```{language}\n(.*?)```"
+    code_match = re.search(pattern, response, re.DOTALL)
+    if not code_match:
+        raise Exception(f"No {language} code block found in the response")
+    return code_match.group(1).strip()
 
 # Connection manager for handling WebSocket connections
 class ConnectionManager:
@@ -303,64 +398,9 @@ Do not handle errors in the code, we will deal with them in the iteration proces
 """
     }]
 
-
     try:
-        logger.info("Making API call to OpenAI")
-        client = openai.OpenAI()
-        stream = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            stream=True,
-        )
-        
-        logger.info("Stream object created, beginning to process chunks")
-        full_response = ""
-        code_section = False
-        current_section = ""
-        
-        await websocket.send_json({
-            "content": "💭 Planning the analysis approach:\n\n"
-        })
-
-        for chunk in stream:
-            if chunk and chunk.choices and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                full_response += content
-                
-                # Check if we're entering or leaving a code block
-                if "```python" in content:
-                    code_section = True
-                    current_section = "```python\n"
-                    continue
-                elif "```" in content and code_section:
-                    code_section = False
-                    if current_section:
-                        await websocket.send_json({
-                            "content": "🔧 Generated analysis code. Now preparing to execute...\n\n"
-                        })
-                    current_section = ""
-                    continue
-                
-                # If we're in a code section, accumulate the code
-                if code_section:
-                    current_section += content
-                else:
-                    # If not in code section, stream the planning/thinking process
-                    if content.strip():
-                        await websocket.send_json({
-                            "content": content
-                        })
-        
-        logger.info("Received response from OpenAI")
-        
-        # Extract only the Python code from between ```python and ``` markers
-        import re
-        code_match = re.search(r'```python\n(.*?)```', full_response, re.DOTALL)
-        if not code_match:
-            logger.error("No Python code block found in the response")
-            raise Exception("No Python code block found in the response")
-            
-        code = code_match.group(1).strip()
+        full_response = await stream_openai_response(messages, websocket)
+        code = extract_code_from_response(full_response)
         logger.info("Successfully extracted Python code from response")
         await websocket.send_json({
             "content": "✨ Analysis code is ready! Starting the execution phase...\n\n"
@@ -370,8 +410,6 @@ Do not handle errors in the code, we will deal with them in the iteration proces
         logger.error(f"Failed to generate analysis code: {str(e)}", exc_info=True)
         raise
 
-
-    
 async def iterate_analysis_script(file_names: List[str], analysis_prompt: str, current_script: str, error_message: str, websocket: WebSocket) -> tuple[str, bool]:
     """
     Iteratively improve the analysis script based on execution errors.
@@ -401,72 +439,26 @@ Please provide a fixed version of the script that:
 2. Maintains the original analysis goals
 3. Ensures proper error handling
 4. Validates data before processing
-5. Properly saves results to 'output/analysis_results.json'
+5. Properly saves results to '{ANALYSIS_RESULTS_PATH}'
+6. if the error is ModuleNotFoundError, rewrite to only use libraries like pandas, matplotlib, json, os, numpy, etc.
 
 Do not use any try except blocks - we will deal with errors in another way.
 Do not handle errors in the code, we will deal with them in the iteration process.
-
 """
     }]
 
     try:
-        logger.info("Making API call to OpenAI for script fix")
-        client = openai.OpenAI()
-        stream = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            stream=True,
-        )
-
-        logger.info("Stream object created, beginning to process chunks")
-        full_response = ""
-        code_section = False
-        current_section = ""
-
-        for chunk in stream:
-            if chunk and chunk.choices and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                full_response += content
-                
-                # Check if we're entering or leaving a code block
-                if "```python" in content:
-                    code_section = True
-                    current_section = "```python\n"
-                    continue
-                elif "```" in content and code_section:
-                    code_section = False
-                    current_section = ""
-                    continue
-                
-                # If we're in a code section, accumulate the code
-                if code_section:
-                    current_section += content
-                else:
-                    # If not in code section, stream the content directly
-                    if content.strip():
-                        await websocket.send_json({
-                            "content": content
-                        })
-        
-        # Extract only the Python code from between ```python and ``` markers
-        import re
-        code_match = re.search(r'```python\n(.*?)```', full_response, re.DOTALL)
-        if not code_match:
-            logger.error("No Python code block found in the response")
-            return current_script, False
-            
-        new_script = code_match.group(1).strip()
+        full_response = await stream_openai_response(messages, websocket)
+        new_script = extract_code_from_response(full_response)
         logger.info("Generated fixed script")
 
         # Save and execute the new script
-        script_path = os.path.join(TEMP_DIR, 'analysis_script.py')
-        with open(script_path, 'w') as f:
+        with open(ANALYSIS_SCRIPT_PATH, 'w') as f:
             f.write(new_script)
 
         try:
-            await execute_analysis_script(script_path, websocket)
-            # Check if the JSON file was created
-            if os.path.exists(os.path.join(OUTPUT_DIR, 'analysis_results.json')):
+            await execute_analysis_script(ANALYSIS_SCRIPT_PATH, websocket)
+            if os.path.exists(ANALYSIS_RESULTS_PATH):
                 return new_script, True
             else:
                 return new_script, False
@@ -476,8 +468,6 @@ Do not handle errors in the code, we will deal with them in the iteration proces
     except Exception as e:
         logger.error(f"Failed to generate fixed script: {str(e)}", exc_info=True)
         return current_script, False
-
-
 
 # Execute the generated analysis script
 async def execute_analysis_script(script_path: str, websocket: WebSocket):
@@ -501,7 +491,47 @@ async def execute_analysis_script(script_path: str, websocket: WebSocket):
         logger.error(f"Error executing analysis script: {str(e)}", exc_info=True)
         raise
 
-# Generate an HTML report from the analysis results using OpenAI API
+# Constants for templates
+ANALYSIS_RESULTS_TEMPLATE = """
+{
+    "title": "Analysis Report Title",
+    "timestamp": "YYYY-MM-DD HH:MM:SS",
+    "summary": {
+        "key_findings": ["Main finding 1", "Main finding 2"],
+        "data_quality": {
+            "missing_values": "Summary",
+            "data_types": "Summary",
+            "anomalies": "Any issues found"
+        }
+    },
+    "description": "Analysis details",
+    "statistics": {
+        "basic_stats": {
+            "numerical_summary": {},
+            "categorical_summary": {}
+        },
+        "advanced_stats": {
+            "correlations": {},
+            "segment_analysis": {}
+        }
+    },
+    "visualizations": {
+        "plots": ["plot1.png", "plot2.png"],
+        "plot_descriptions": {
+            "plot1.png": "What this plot shows",
+            "plot2.png": "What this plot shows"
+        }
+    },
+    "metadata": {
+        "analysis_duration": "Time taken",
+        "data_sources": [],
+        "file_types": {},
+        "rows_analyzed": "Count per file",
+        "columns_analyzed": "List per file"
+    }
+}
+"""
+
 async def generate_html_report(analysis_json_path: str, output_html_path: str, websocket: WebSocket):
     """
     Generate an HTML report from the analysis results using OpenAI API.
@@ -520,7 +550,6 @@ async def generate_html_report(analysis_json_path: str, output_html_path: str, w
                 plot.replace('output/', '') for plot in analysis_data['visualizations']['plots']
             ]
         
-        # Prepare the prompt for OpenAI
         messages = [{
             "role": "system",
             "content": """You are an expert HTML/CSS developer and data analyst. Create a beautiful, modern HTML report about a data analysis using Tailwind CSS.
@@ -559,48 +588,9 @@ REQUIREMENTS:
 Return only the complete HTML code with all required scripts, values and styles included."""
         }]
 
-        # Make API call to OpenAI
-        logger.info("Making API call to OpenAI for HTML generation")
-        client = openai.OpenAI()
-        stream = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            stream=True,
-        )
+        full_response = await stream_openai_response(messages, websocket)
+        html_content = extract_code_from_response(full_response, 'html')
         
-        logger.info("Stream object created, beginning to process chunks")
-        full_response = ""
-        in_html = False
-        
-        for chunk in stream:
-            if chunk and chunk.choices and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                full_response += content
-                
-                # Check if we're entering or leaving an HTML block
-                if "```html" in content:
-                    in_html = True
-                    continue
-                elif "```" in content and in_html:
-                    in_html = False
-                    continue
-                
-                # Stream all non-empty content directly
-                if content.strip():
-                    await websocket.send_json({
-                        "content": content
-                    })
-        
-        # Extract only the HTML from between ```html and ``` markers
-        import re
-        html_match = re.search(r'```html\n(.*?)```', full_response, re.DOTALL)
-        if not html_match:
-            logger.error("No HTML code block found in the response")
-            raise Exception("No HTML code block found in the response")
-            
-        html_content = html_match.group(1).strip()
-        logger.info("Successfully extracted HTML content from response")
-
         # Save the HTML report
         with open(output_html_path, 'w') as f:
             f.write(html_content)
@@ -609,7 +599,6 @@ Return only the complete HTML code with all required scripts, values and styles 
     except Exception as e:
         logger.error(f"Failed to generate HTML report: {str(e)}")
         raise
-
 
 # Convert HTML to PDF
 def generate_pdf_from_html(html_path: str, pdf_path: str, websocket: WebSocket):
@@ -664,26 +653,15 @@ The summary should flow naturally when spoken and avoid technical jargon unless 
             "status": "Generating verbal summary of the analysis..."
         })
 
-        client = openai.OpenAI()
-        stream = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
+        full_response = await stream_openai_response(
+            messages,
+            websocket,
             temperature=0.7,
-            max_tokens=800,
-            stream=True
+            max_tokens=800
         )
         
-        full_summary = ""
-        for chunk in stream:
-            if chunk and chunk.choices and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                full_summary += content
-                await websocket.send_json({
-                    "content": content
-                })
-        
         logger.info("Successfully generated verbal summary")
-        return full_summary
+        return full_response
 
     except Exception as e:
         logger.error(f"Failed to generate verbal summary: {str(e)}")
@@ -702,15 +680,13 @@ async def generate_speech(text: str, websocket: WebSocket) -> bytes:
         if not elevenlabs_client:
             raise Exception("ElevenLabs client not initialized - missing API key")
 
-        # Using Rachel voice by default, with a balanced speaking style
         audio_stream = elevenlabs_client.text_to_speech.convert(
             text=text,
-            voice_id="JBFqnCBsd6RMkjVDRZzb",  # Rachel voice ID
-            model_id="eleven_turbo_v2_5",
-            output_format="mp3_44100_128"
+            voice_id=ELEVENLABS_VOICE_ID,
+            model_id=ELEVENLABS_MODEL_ID,
+            output_format=ELEVENLABS_OUTPUT_FORMAT
         )
         
-        # Collect all bytes from the generator
         audio_bytes = b''
         for chunk in audio_stream:
             if isinstance(chunk, bytes):
@@ -723,185 +699,186 @@ async def generate_speech(text: str, websocket: WebSocket) -> bytes:
         logger.error(f"Failed to generate speech: {str(e)}")
         raise
 
+# WebSocket message handlers
+async def handle_analysis_start(data: Dict[str, Any], file_chunks: Dict[str, Dict[str, Any]], websocket: WebSocket):
+    """Handle the analysis_start message type."""
+    file_names = data.get('fileNames', [])
+    prompt = data.get('prompt', '')
+    
+    for file_name in file_names:
+        file_chunks[file_name] = {
+            'chunks': [],
+            'total_chunks': None,
+            'received_chunks': 0
+        }
+    
+    logger.info(f"Starting analysis for files: {file_names}")
+    return file_names, prompt
+
+async def handle_file_chunk(data: Dict[str, Any], file_chunks: Dict[str, Dict[str, Any]], websocket: WebSocket):
+    """Handle the file_chunk message type."""
+    file_name = data.get('fileName')
+    chunk_index = data.get('chunkIndex')
+    total_chunks = data.get('totalChunks')
+    content = data.get('content')
+    
+    if file_name not in file_chunks:
+        raise Exception(f"Received chunk for unknown file: {file_name}")
+    
+    file_info = file_chunks[file_name]
+    if file_info['total_chunks'] is None:
+        file_info['total_chunks'] = total_chunks
+        file_info['chunks'] = [None] * total_chunks
+    
+    file_info['chunks'][chunk_index] = content
+    file_info['received_chunks'] += 1
+    
+    # Send acknowledgment
+    await websocket.send_json({
+        'type': 'chunk_received',
+        'fileName': file_name,
+        'chunkIndex': chunk_index
+    })
+    
+    logger.info(f"Received chunk {chunk_index + 1}/{total_chunks} for {file_name}")
+
+async def handle_analysis_ready(file_chunks: Dict[str, Dict[str, Any]], prompt: str, websocket: WebSocket):
+    """Handle the analysis_ready message type."""
+    logger.info("All files received, starting analysis")
+    
+    # Save complete files
+    for file_name, file_info in file_chunks.items():
+        if file_info['received_chunks'] != file_info['total_chunks']:
+            raise Exception(f"Incomplete file received: {file_name}")
+        
+        complete_content = ''.join(file_info['chunks'])
+        file_path = os.path.join(INPUT_DIR, file_name)
+        
+        with open(file_path, 'w') as f:
+            f.write(complete_content)
+    
+    # Generate and save analysis code
+    try:
+        analysis_code = await generate_analysis_code(list(file_chunks.keys()), prompt, websocket)
+        with open(ANALYSIS_SCRIPT_PATH, 'w') as f:
+            f.write(analysis_code)
+        logger.info("Successfully generated and saved analysis code")
+    except Exception as e:
+        logger.error(f"Error generating analysis code: {str(e)}")
+        await websocket.send_json({"error": f"Error generating analysis code: {str(e)}"})
+        return
+    
+    # Execute the analysis script with retries
+    current_retry = 0
+    current_script = analysis_code
+    success = False
+
+    while current_retry < MAX_RETRIES and not success:
+        try:
+            await execute_analysis_script(ANALYSIS_SCRIPT_PATH, websocket)
+            if os.path.exists(ANALYSIS_RESULTS_PATH):
+                success = True
+                break
+        except Exception as e:
+            error_message = str(e)
+            logger.error(f"Analysis script failed (attempt {current_retry + 1}/{MAX_RETRIES}): {error_message}")
+            await websocket.send_json({"status": "Improving analysis..."})
+            
+            current_script, success = await iterate_analysis_script(
+                list(file_chunks.keys()),
+                prompt,
+                current_script,
+                error_message,
+                websocket
+            )
+            if success:
+                break
+            current_retry += 1
+
+    if not success:
+        raise Exception("Failed to execute analysis script after maximum retries")
+
+    # Generate reports and summaries
+    if not os.path.exists(ANALYSIS_RESULTS_PATH):
+        logger.error("Analysis results JSON not found")
+        return
+    
+    await websocket.send_json({"status": "Generating report..."})
+    await generate_html_report(ANALYSIS_RESULTS_PATH, REPORT_HTML_PATH, websocket)
+    
+    # Convert HTML to PDF
+    generate_pdf_from_html(REPORT_HTML_PATH, REPORT_PDF_PATH, websocket)
+    
+    # Read file contents
+    with open(REPORT_HTML_PATH, 'r', encoding='utf-8') as f:
+        html_content = f.read()
+    with open(REPORT_PDF_PATH, 'rb') as f:
+        pdf_content = f.read()
+    
+    # Read analysis data and encode images
+    with open(ANALYSIS_RESULTS_PATH, 'r') as f:
+        analysis_data = json.load(f)
+    
+    image_data = {}
+    visualizations = analysis_data.get('visualizations', {})
+    for plot_path in visualizations.get('plots', []):
+        full_path = os.path.join(OUTPUT_DIR, os.path.basename(plot_path))
+        if os.path.exists(full_path):
+            with open(full_path, 'rb') as f:
+                image_content = f.read()
+                image_data[os.path.basename(plot_path)] = base64.b64encode(image_content).decode('utf-8')
+    
+    # Modify HTML content to use base64 encoded images
+    for image_name, image_content in image_data.items():
+        html_content = html_content.replace(
+            f'src="{image_name}"',
+            f'src="data:image/png;base64,{image_content}"'
+        )
+    
+    # Generate verbal summary and speech
+    try:
+        verbal_summary = await generate_verbal_summary(analysis_data, websocket)
+        audio_content = await generate_speech(verbal_summary, websocket)
+        audio_base64 = base64.b64encode(audio_content).decode('utf-8')
+    except Exception as e:
+        logger.error(f"Failed to generate speech content: {str(e)}")
+        audio_base64 = None
+        await websocket.send_json({
+            "content": f"⚠️ Could not generate speech: {str(e)}\n\n"
+        })
+    
+    # Send completion message with all content
+    await websocket.send_json({
+        "status": "completed",
+        "html_content": html_content,
+        "pdf_content": base64.b64encode(pdf_content).decode('utf-8'),
+        "image_data": image_data,
+        "audio_content": audio_base64,
+        "verbal_summary": verbal_summary if audio_base64 else None
+    })
+
 # WebSocket endpoint for data analysis
 @app.websocket("/ws/analyze")
 async def analyze_data(websocket: WebSocket):
-    # Connect to the WebSocket
+    """WebSocket endpoint for data analysis."""
     await manager.connect(websocket)
     logger.info("New WebSocket connection established")
     
-    # Dictionary to store file chunks
     file_chunks = {}
+    prompt = ""
     
     try:
         while True:
             try:
-                # Receive data from WebSocket
                 data = await websocket.receive_json()
                 message_type = data.get('type', '')
                 
                 if message_type == 'analysis_start':
-                    # Initialize file chunks for each file
-                    file_names = data.get('fileNames', [])
-                    prompt = data.get('prompt', '')
-                    
-                    for file_name in file_names:
-                        file_chunks[file_name] = {
-                            'chunks': [],
-                            'total_chunks': None,
-                            'received_chunks': 0
-                        }
-                    
-                    logger.info(f"Starting analysis for files: {file_names}")
-                    
+                    _, prompt = await handle_analysis_start(data, file_chunks, websocket)
                 elif message_type == 'file_chunk':
-                    # Process file chunk
-                    file_name = data.get('fileName')
-                    chunk_index = data.get('chunkIndex')
-                    total_chunks = data.get('totalChunks')
-                    content = data.get('content')
-                    
-                    if file_name not in file_chunks:
-                        raise Exception(f"Received chunk for unknown file: {file_name}")
-                    
-                    file_info = file_chunks[file_name]
-                    if file_info['total_chunks'] is None:
-                        file_info['total_chunks'] = total_chunks
-                        file_info['chunks'] = [None] * total_chunks
-                    
-                    file_info['chunks'][chunk_index] = content
-                    file_info['received_chunks'] += 1
-                    
-                    # Send acknowledgment
-                    await websocket.send_json({
-                        'type': 'chunk_received',
-                        'fileName': file_name,
-                        'chunkIndex': chunk_index
-                    })
-                    
-                    logger.info(f"Received chunk {chunk_index + 1}/{total_chunks} for {file_name}")
-                    
+                    await handle_file_chunk(data, file_chunks, websocket)
                 elif message_type == 'analysis_ready':
-                    # All files received, start analysis
-                    logger.info("All files received, starting analysis")
-                    
-                    # Save complete files
-                    for file_name, file_info in file_chunks.items():
-                        if file_info['received_chunks'] != file_info['total_chunks']:
-                            raise Exception(f"Incomplete file received: {file_name}")
-                        
-                        complete_content = ''.join(file_info['chunks'])
-                        file_path = os.path.join(INPUT_DIR, file_name)
-                        
-                        with open(file_path, 'w') as f:
-                            f.write(complete_content)
-                    
-                    # Generate and save analysis code
-                    try:
-                        analysis_code = await generate_analysis_code(list(file_chunks.keys()), prompt, websocket)
-                        script_path = os.path.join(TEMP_DIR, 'analysis_script.py')
-                        with open(script_path, 'w') as f:
-                            f.write(analysis_code)
-                        logger.info("Successfully generated and saved analysis code")
-                    except Exception as e:
-                        logger.error(f"Error generating analysis code: {str(e)}")
-                        await websocket.send_json({"error": f"Error generating analysis code: {str(e)}"})
-                        continue
-                    
-                    # Execute the analysis script with retries
-                    max_retries = 5
-                    current_retry = 0
-                    current_script = analysis_code
-                    success = False
-
-                    while current_retry < max_retries and not success:
-                        try:
-                            await execute_analysis_script(script_path, websocket)
-                            if os.path.exists(os.path.join(OUTPUT_DIR, 'analysis_results.json')):
-                                success = True
-                                break
-                        except Exception as e:
-                            error_message = str(e)
-                            logger.error(f"Analysis script failed (attempt {current_retry + 1}/{max_retries}): {error_message}")
-                            await websocket.send_json({"status": "Improving analysis..."})
-                            
-                            current_script, success = await iterate_analysis_script(
-                                list(file_chunks.keys()),
-                                prompt,
-                                current_script,
-                                error_message,
-                                websocket
-                            )
-                            if success:
-                                break
-                            current_retry += 1
-
-                    if not success:
-                        raise Exception("Failed to execute analysis script after maximum retries")
-
-                    # Generate HTML report from analysis results
-                    analysis_json_path = os.path.join(OUTPUT_DIR, 'analysis_results.json')
-                    if not os.path.exists(analysis_json_path):
-                        logger.error("Analysis results JSON not found")
-                        continue
-                    
-                    await websocket.send_json({"status": "Generating report..."})
-                    output_html_path = os.path.join(OUTPUT_DIR, 'report.html')
-                    await generate_html_report(analysis_json_path, output_html_path, websocket)
-                    
-                    # Convert HTML to PDF
-                    output_pdf_path = os.path.join(OUTPUT_DIR, 'report.pdf')
-                    generate_pdf_from_html(output_html_path, output_pdf_path, websocket)
-                    
-                    # Read file contents
-                    with open(output_html_path, 'r', encoding='utf-8') as f:
-                        html_content = f.read()
-                    with open(output_pdf_path, 'rb') as f:
-                        pdf_content = f.read()
-                    
-                    # Read image files and encode them
-                    with open(analysis_json_path, 'r') as f:
-                        analysis_data = json.load(f)
-                    
-                    image_data = {}
-                    visualizations = analysis_data.get('visualizations', {})
-                    for plot_path in visualizations.get('plots', []):
-                        full_path = os.path.join(OUTPUT_DIR, os.path.basename(plot_path))
-                        if os.path.exists(full_path):
-                            with open(full_path, 'rb') as f:
-                                image_content = f.read()
-                                image_data[os.path.basename(plot_path)] = base64.b64encode(image_content).decode('utf-8')
-                    
-                    # Modify HTML content to use base64 encoded images
-                    for image_name, image_content in image_data.items():
-                        html_content = html_content.replace(
-                            f'src="{image_name}"',
-                            f'src="data:image/png;base64,{image_content}"'
-                        )
-                    
-                    # Generate verbal summary and speech
-                    try:
-                        verbal_summary = await generate_verbal_summary(analysis_data, websocket)
-                        audio_content = await generate_speech(verbal_summary, websocket)
-                        audio_base64 = base64.b64encode(audio_content).decode('utf-8')
-                    except Exception as e:
-                        logger.error(f"Failed to generate speech content: {str(e)}")
-                        audio_base64 = None
-                        await websocket.send_json({
-                            "content": f"⚠️ Could not generate speech: {str(e)}\n\n"
-                        })
-                    
-                    # Send completion message with all content
-                    await websocket.send_json({
-                        "status": "completed",
-                        "html_content": html_content,
-                        "pdf_content": base64.b64encode(pdf_content).decode('utf-8'),
-                        "image_data": image_data,
-                        "audio_content": audio_base64,
-                        "verbal_summary": verbal_summary if audio_base64 else None
-                    })
-                    
-                    # Clear file chunks
+                    await handle_analysis_ready(file_chunks, prompt, websocket)
                     file_chunks.clear()
                 
             except WebSocketDisconnect:
